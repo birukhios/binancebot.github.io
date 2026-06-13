@@ -5,6 +5,7 @@ import { localBinanceCredsForUser } from "@/lib/binance/local-creds.server";
 
 const MAINNET = "https://fapi.binance.com";
 const TESTNET = "https://testnet.binancefuture.com";
+const BINANCE_TIMEOUT_MS = 7_000;
 
 // Original owner can still fall back to the env-stored keys.
 const OWNER_USER_ID = "766ced41-29ab-4304-9497-800a95bb7530";
@@ -41,6 +42,14 @@ export function formatBinanceError(error: unknown, testnet: boolean) {
     return `Binance rejected the saved ${testnet ? "testnet" : "mainnet"} key. Update this account's ${testnet ? "testnet" : "mainnet"} API key and secret in Settings, and make sure it is a Futures key with trading permission${testnet ? " from Binance Futures Testnet" : ""}.`;
   }
   return message.length > 260 ? `${message.slice(0, 257)}…` : message;
+}
+
+function transientBinanceError(creds: BinanceCreds, method: string, path: string, cause: unknown) {
+  const message = cause instanceof Error ? cause.message : String(cause);
+  const network = creds.testnet ? "testnet" : "mainnet";
+  return new Error(
+    `Binance Futures ${network} is temporarily unreachable from this server (${method} ${path}: ${message}). The bot will keep retrying.`,
+  );
 }
 
 function cleanBinanceError(creds: BinanceCreds, method: string, path: string, status: number, body: string) {
@@ -142,7 +151,10 @@ async function serverTimestamp(creds: BinanceCreds, forceRefresh = false) {
     return Date.now() + cached.offsetMs;
   }
   try {
-    const res = await fetch(`${host}/fapi/v1/time`, { headers: { "user-agent": "crypto-caddie-demo/1.0" } });
+    const res = await fetch(`${host}/fapi/v1/time`, {
+      headers: { "user-agent": "crypto-caddie-demo/1.0" },
+      signal: AbortSignal.timeout(BINANCE_TIMEOUT_MS),
+    });
     const json = (await res.json()) as { serverTime?: number };
     if (res.ok && Number.isFinite(json.serverTime)) {
       const offsetMs = Number(json.serverTime) - Date.now();
@@ -282,7 +294,17 @@ async function demoMarketFallback<T>(path: string, params: Record<string, string
 
 async function publicReq<T>(creds: BinanceCreds, path: string, params: Record<string, string | number> = {}): Promise<T> {
   const url = `${base(creds)}${path}${Object.keys(params).length ? "?" + qs(params) : ""}`;
-  const res = await fetch(url);
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      headers: { "user-agent": "crypto-caddie-demo/1.0" },
+      signal: AbortSignal.timeout(BINANCE_TIMEOUT_MS),
+    });
+  } catch (e) {
+    const error = transientBinanceError(creds, "GET", path, e);
+    if (creds.testnet) return demoMarketFallback<T>(path, params, error);
+    throw error;
+  }
   if (!res.ok) {
     const text = await res.text();
     const error = new Error(
@@ -307,10 +329,16 @@ async function signedReq<T>(
     const query = qs(full);
     const sig = sign(creds.apiSecret, query);
     const url = `${base(creds)}${path}?${query}&signature=${sig}`;
-    const res = await fetch(url, {
-      method,
-      headers: { "X-MBX-APIKEY": creds.apiKey },
-    });
+    let res: Response;
+    try {
+      res = await fetch(url, {
+        method,
+        headers: { "X-MBX-APIKEY": creds.apiKey, "user-agent": "crypto-caddie-demo/1.0" },
+        signal: AbortSignal.timeout(BINANCE_TIMEOUT_MS),
+      });
+    } catch (e) {
+      throw transientBinanceError(creds, method, path, e);
+    }
     return { res, text: await res.text() };
   };
 
@@ -357,6 +385,10 @@ export function isBinanceNetworkBlock(error: unknown) {
   const message = error instanceof Error ? error.message : String(error);
   return (
     message.includes("Binance network blocked") ||
+    message.includes("temporarily unreachable") ||
+    message.includes("fetch failed") ||
+    message.includes("Connection reset") ||
+    message.includes("aborted") ||
     /\b403\b/.test(message) ||
     /cloudfront|request blocked/i.test(message)
   );
