@@ -1,11 +1,13 @@
 // Binance USDⓈ-M Futures REST client. Server-only.
 import { createHmac } from "node:crypto";
+import { ProxyAgent } from "undici";
 import { supabaseAdmin } from "@/integrations/supabase/client.server";
 import { localBinanceCredsForUser } from "@/lib/binance/local-creds.server";
 
 const MAINNET = "https://fapi.binance.com";
 const TESTNET = "https://testnet.binancefuture.com";
 const BINANCE_TIMEOUT_MS = 7_000;
+let proxyAgentCache: { url: string; agent: ProxyAgent } | null = null;
 
 // Original owner can still fall back to the env-stored keys.
 const OWNER_USER_ID = "766ced41-29ab-4304-9497-800a95bb7530";
@@ -142,6 +144,20 @@ function base(creds: BinanceCreds) {
   return creds.testnet ? TESTNET : MAINNET;
 }
 
+function binanceProxyDispatcher() {
+  const url = process.env.BINANCE_PROXY_URL?.trim();
+  if (!url) return undefined;
+  if (!proxyAgentCache || proxyAgentCache.url !== url) {
+    proxyAgentCache = { url, agent: new ProxyAgent(url) };
+  }
+  return proxyAgentCache.agent;
+}
+
+function binanceFetch(input: string | URL, init: RequestInit = {}) {
+  const dispatcher = binanceProxyDispatcher();
+  return fetch(input, dispatcher ? ({ ...init, dispatcher } as RequestInit & { dispatcher: ProxyAgent }) : init);
+}
+
 const serverTimeOffsetCache = new Map<string, { offsetMs: number; expiresAt: number }>();
 
 async function serverTimestamp(creds: BinanceCreds, forceRefresh = false) {
@@ -151,7 +167,7 @@ async function serverTimestamp(creds: BinanceCreds, forceRefresh = false) {
     return Date.now() + cached.offsetMs;
   }
   try {
-    const res = await fetch(`${host}/fapi/v1/time`, {
+    const res = await binanceFetch(`${host}/fapi/v1/time`, {
       headers: { "user-agent": "crypto-caddie-demo/1.0" },
       signal: AbortSignal.timeout(BINANCE_TIMEOUT_MS),
     });
@@ -211,7 +227,10 @@ async function demoMarketFallback<T>(path: string, params: Record<string, string
   // unauthenticated testnet market-data edge blocks this cloud runtime.
   try {
     const url = `${MAINNET}${path}${Object.keys(params).length ? "?" + qs(params) : ""}`;
-    const res = await fetch(url, { headers: { "user-agent": "crypto-caddie-demo/1.0" } });
+    const res = await binanceFetch(url, {
+      headers: { "user-agent": "crypto-caddie-demo/1.0" },
+      signal: AbortSignal.timeout(BINANCE_TIMEOUT_MS),
+    });
     const text = await res.text();
     if (res.ok) return JSON.parse(text) as T;
     if (!networkBlocked(res.status, text)) throw new Error(`Binance ${path} ${res.status}: ${text.slice(0, 160)}`);
@@ -296,7 +315,7 @@ async function publicReq<T>(creds: BinanceCreds, path: string, params: Record<st
   const url = `${base(creds)}${path}${Object.keys(params).length ? "?" + qs(params) : ""}`;
   let res: Response;
   try {
-    res = await fetch(url, {
+    res = await binanceFetch(url, {
       headers: { "user-agent": "crypto-caddie-demo/1.0" },
       signal: AbortSignal.timeout(BINANCE_TIMEOUT_MS),
     });
@@ -331,7 +350,7 @@ async function signedReq<T>(
     const url = `${base(creds)}${path}?${query}&signature=${sig}`;
     let res: Response;
     try {
-      res = await fetch(url, {
+      res = await binanceFetch(url, {
         method,
         headers: { "X-MBX-APIKEY": creds.apiKey, "user-agent": "crypto-caddie-demo/1.0" },
         signal: AbortSignal.timeout(BINANCE_TIMEOUT_MS),
