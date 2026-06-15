@@ -7,13 +7,51 @@ import { dash } from "@better-auth/infra";
 import { tanstackStartCookies } from "better-auth/tanstack-start";
 
 function resolveAuthBaseURL() {
-  if (process.env.BETTER_AUTH_URL) return process.env.BETTER_AUTH_URL;
-  return {
-    allowedHosts: ["localhost", "127.0.0.1", "*.vercel.app"],
-    fallback: process.env.VERCEL_URL
+  const fallback =
+    process.env.BETTER_AUTH_URL ??
+    (process.env.VERCEL_URL
       ? `https://${process.env.VERCEL_URL}`
-      : `http://127.0.0.1:${process.env.PORT ?? "8080"}`,
+      : `http://127.0.0.1:${process.env.PORT ?? "8080"}`);
+
+  return {
+    allowedHosts: [
+      "localhost",
+      "localhost:*",
+      "127.0.0.1",
+      "127.0.0.1:*",
+      "binancebot-github-io.vercel.app",
+      "*.vercel.app",
+      "*.trycloudflare.com",
+      "*.loca.lt",
+    ],
+    fallback,
+    protocol: "auto" as const,
   };
+}
+
+function resolveTrustedOrigins() {
+  const origins = [
+    "http://localhost",
+    "http://localhost:*",
+    "http://127.0.0.1",
+    "http://127.0.0.1:*",
+    "https://binancebot-github-io.vercel.app",
+    "https://*.vercel.app",
+    "https://*.trycloudflare.com",
+    "https://*.loca.lt",
+  ];
+
+  if (process.env.BETTER_AUTH_URL) {
+    try {
+      origins.push(new URL(process.env.BETTER_AUTH_URL).origin);
+    } catch {}
+  }
+
+  if (process.env.VERCEL_URL) {
+    origins.push(`https://${process.env.VERCEL_URL}`);
+  }
+
+  return Array.from(new Set(origins));
 }
 
 const dbPath = resolve(
@@ -28,6 +66,7 @@ const database = process.env.VERCEL
 
 export const auth = betterAuth({
   baseURL: resolveAuthBaseURL(),
+  trustedOrigins: resolveTrustedOrigins,
   secret:
     process.env.BETTER_AUTH_SECRET ??
     "local-development-better-auth-secret-change-before-production",
