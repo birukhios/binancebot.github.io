@@ -8,8 +8,12 @@ import { tanstackStartCookies } from "better-auth/tanstack-start";
 
 function resolveAuthBaseURL() {
   if (process.env.BETTER_AUTH_URL) return process.env.BETTER_AUTH_URL;
-  if (process.env.VERCEL_URL) return `https://${process.env.VERCEL_URL}`;
-  return `http://127.0.0.1:${process.env.PORT ?? "8080"}`;
+  return {
+    allowedHosts: ["localhost", "127.0.0.1", "*.vercel.app"],
+    fallback: process.env.VERCEL_URL
+      ? `https://${process.env.VERCEL_URL}`
+      : `http://127.0.0.1:${process.env.PORT ?? "8080"}`,
+  };
 }
 
 const dbPath = resolve(
