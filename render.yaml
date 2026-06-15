@@ -3,12 +3,14 @@ services:
     name: binancebot
     runtime: node
     plan: free
-    buildCommand: npm ci && npm run build
+    buildCommand: npm ci && npm run render:build
     startCommand: npm run start
     healthCheckPath: /healthz
     envVars:
       - key: NODE_ENV
         value: production
+      - key: NODE_OPTIONS
+        value: --max-old-space-size=2048
       - key: BETTER_AUTH_URL
         value: https://binancebot.onrender.com
       - key: BETTER_AUTH_SECRET

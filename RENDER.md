@@ -5,7 +5,7 @@ This app needs a Render Web Service, not GitHub Pages, because it uses server-si
 ## Settings
 
 - Repository: `birukhios/binancebot`
-- Build command: `npm ci && npm run build`
+- Build command: `npm ci && npm run render:build`
 - Start command: `npm run start`
 - Health check path: `/healthz`
 - Runtime: Node
@@ -16,6 +16,7 @@ Set these in Render after creating the service:
 
 ```env
 NODE_ENV=production
+NODE_OPTIONS=--max-old-space-size=2048
 BETTER_AUTH_URL=https://YOUR-RENDER-SERVICE.onrender.com
 BETTER_AUTH_SECRET=<generate a long random secret>
 BETTER_AUTH_DB_PATH=/tmp/auth.sqlite
