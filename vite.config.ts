@@ -14,6 +14,21 @@ export default defineConfig({
   },
   nitro: {
     preset: "vercel",
+    vercel: {
+      entryFormat: "node",
+      functions: {
+        runtime: "nodejs22.x",
+        maxDuration: 60,
+        memory: 1024,
+        supportsResponseStreaming: true,
+      },
+      functionRules: {
+        "/**": {
+          maxDuration: 60,
+          memory: 1024,
+        },
+      },
+    },
   },
   tanstackStart: {
     // Redirect TanStack Start's bundled server entry to src/server.ts (our SSR error wrapper).
