@@ -1,8 +1,9 @@
-import { createFileRoute, useNavigate, useRouter } from "@tanstack/react-router";
+import { createFileRoute, useRouter } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { useServerFn } from "@tanstack/react-start";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { authClient } from "@/lib/auth-client";
+import { AuthPage } from "@/routes/auth";
 import {
   getDashboard,
   getTrades,
@@ -48,7 +49,6 @@ export const Route = createFileRoute("/")({
 });
 
 function Dashboard() {
-  const navigate = useNavigate();
   const router = useRouter();
   const qc = useQueryClient();
   const session = authClient.useSession();
@@ -64,17 +64,7 @@ function Dashboard() {
       return nextUserId;
     });
     setAuthChecked(!!nextUserId);
-
-    if (!nextUserId) navigate({ to: "/auth" });
-  }, [navigate, qc, session.data?.user.id, session.isPending]);
-
-  useEffect(() => {
-    if (!session.isPending || authChecked) return;
-    const timeout = window.setTimeout(() => {
-      navigate({ to: "/auth", replace: true });
-    }, 4000);
-    return () => window.clearTimeout(timeout);
-  }, [authChecked, navigate, session.isPending]);
+  }, [qc, session.data?.user.id, session.isPending]);
 
   const dashFn = useServerFn(getDashboard);
   const tradesFn = useServerFn(getTrades);
@@ -160,7 +150,8 @@ function Dashboard() {
     },
   });
 
-  if (!authChecked) return <div className="p-8 text-muted-foreground">Loading…</div>;
+  if (session.isPending) return <div className="p-8 text-muted-foreground">Loading…</div>;
+  if (!authChecked) return <AuthPage />;
   if (dash.isError) {
     const message =
       dash.error instanceof Error ? dash.error.message : "The dashboard could not load.";
@@ -186,7 +177,7 @@ function Dashboard() {
                   await qc.cancelQueries();
                   qc.clear();
                   await authClient.signOut();
-                  navigate({ to: "/auth", replace: true });
+                  window.location.reload();
                 }}
               >
                 Sign out
@@ -288,7 +279,7 @@ function Dashboard() {
                 await qc.cancelQueries();
                 qc.clear();
                 await authClient.signOut();
-                navigate({ to: "/auth", replace: true });
+                window.location.reload();
               }}
             >
               <LogOut className="h-4 w-4" />

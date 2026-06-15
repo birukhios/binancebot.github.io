@@ -12,7 +12,7 @@ export const Route = createFileRoute("/auth")({
   component: AuthPage,
 });
 
-function AuthPage() {
+export function AuthPage() {
   const navigate = useNavigate();
   const session = authClient.useSession();
   const [mode, setMode] = useState<"signin" | "signup">("signin");
