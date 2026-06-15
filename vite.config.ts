@@ -3,7 +3,7 @@
 //   - tanstackStart, viteReact, tailwindcss, tsConfigPaths, nitro (build-only using cloudflare as a default target),
 //     componentTagger (dev-only), VITE_* env injection, @ path alias, React/TanStack dedupe,
 //     error logger plugins, and sandbox detection (port/host/strictPort).
-// You can pass additional config via defineConfig({ vite: { ... }, etc... }) if needed.
+// You can pass additional config via defineConfig({ vite: { ... }, nitro: { ... }, etc... }) if needed.
 import { defineConfig } from "@lovable.dev/vite-tanstack-config";
 
 export default defineConfig({
@@ -11,6 +11,9 @@ export default defineConfig({
     server: {
       allowedHosts: [".trycloudflare.com", ".loca.lt"],
     },
+  },
+  nitro: {
+    preset: "vercel",
   },
   tanstackStart: {
     // Redirect TanStack Start's bundled server entry to src/server.ts (our SSR error wrapper).
