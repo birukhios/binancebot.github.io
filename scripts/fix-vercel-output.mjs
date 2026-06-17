@@ -30,7 +30,11 @@ console.log("Adjusted Vercel route order so SSR handles app pages before the sta
 
 const assetsDir = resolve(outputRoot, "static/assets");
 const cssAsset = readdirSync(assetsDir).find((file) => /^styles-.*\.css$/.test(file));
-const manifestPath = resolve(outputRoot, "functions/[...].func/_tanstack-start-manifest_v-DWv_NKub.mjs");
+const functionsDir = resolve(outputRoot, "functions/[...].func");
+const manifestFile = readdirSync(functionsDir).find((file) =>
+  /^_tanstack-start-manifest_v-.*\.mjs$/.test(file),
+);
+const manifestPath = manifestFile ? resolve(functionsDir, manifestFile) : "";
 
 if (!cssAsset || !existsSync(manifestPath)) {
   process.exit(0);
