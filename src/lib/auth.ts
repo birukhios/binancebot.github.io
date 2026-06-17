@@ -127,6 +127,14 @@ export const auth = betterAuth({
     process.env.BETTER_AUTH_SECRET ??
     "local-development-better-auth-secret-change-before-production",
   database,
+  session: {
+    storeSessionInDatabase: false,
+    cookieCache: {
+      enabled: true,
+      maxAge: 60 * 60 * 24 * 7,
+      strategy: "jwe",
+    },
+  },
   emailAndPassword: {
     enabled: true,
   },
