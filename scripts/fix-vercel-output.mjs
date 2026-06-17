@@ -17,16 +17,14 @@ const routes = config.routes;
 const catchAllIndex = routes.findIndex((route) => route.src === "/(?:.*)" && route.dest === "/[...]");
 const serverIndex = routes.findIndex((route) => route.src === "/(.*)" && route.dest === "/__server");
 
-if (catchAllIndex === -1 || serverIndex === -1 || serverIndex < catchAllIndex) {
-  process.exit(0);
+if (catchAllIndex !== -1 && serverIndex !== -1 && catchAllIndex > serverIndex) {
+  const [catchAll] = routes.splice(catchAllIndex, 1);
+  const nextServerIndex = routes.findIndex((route) => route.src === "/(.*)" && route.dest === "/__server");
+  routes.splice(nextServerIndex, 0, catchAll);
 }
 
-const [catchAll] = routes.splice(catchAllIndex, 1);
-const nextServerIndex = routes.findIndex((route) => route.src === "/(.*)" && route.dest === "/__server");
-routes.splice(nextServerIndex + 1, 0, catchAll);
-
 writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
-console.log("Adjusted Vercel route order so SSR handles app pages before the static fallback.");
+console.log("Kept Vercel catch-all route ahead of the SSR function and patched the client boot template.");
 
 const assetsDir = resolve(outputRoot, "static/assets");
 const cssAsset = readdirSync(assetsDir).find((file) => /^styles-.*\.css$/.test(file));
