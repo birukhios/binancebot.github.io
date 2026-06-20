@@ -14,8 +14,8 @@ const BTC_SYMBOL = "BTCUSDT";
 const BTC_MAX_ENTRY_SLOTS = 4;
 const BTC_GRID_LEVELS = 2;
 const BTC_LEVERAGE = 3;
-const BTC_FAST_SPACING_PCT = 0.35;
-const BTC_MIN_ORDER_USDT = 300;
+const BTC_FAST_SPACING_PCT = 0.18;
+const BTC_MIN_ORDER_USDT = 75;
 const LOSS_STREAK_MIN_LOSS_USDT = 1;
 
 type RunnerRegistry = Record<string, { timer: ReturnType<typeof setInterval>; running: boolean }>;
@@ -72,17 +72,8 @@ async function dailyPnl(creds: Awaited<ReturnType<typeof getCredsForUser>>, open
 export async function runLocalBotTick(userId: string) {
   let state = getLocalBotState(userId);
   if (!state.cfg.is_running) return { ok: true, skipped: "stopped" };
-  if (state.cfg.testnet !== true) {
-    updateLocalBotConfig(userId, { is_running: false });
-    addLocalLog(
-      userId,
-      "error",
-      "Local shared runner only supports Binance Futures TESTNET. Bot stopped.",
-    );
-    return { ok: false, error: "mainnet blocked" };
-  }
-
-  const creds = await getCredsForUser(userId, true);
+  const testnet = Boolean(state.cfg.testnet ?? true);
+  const creds = await getCredsForUser(userId, testnet);
   const account = await binance.account(creds);
   const walletBalance = Math.max(0, Number(account.totalWalletBalance ?? 0));
   const totalEquity = walletBalance + Number(account.totalUnrealizedProfit ?? 0);
@@ -307,13 +298,16 @@ export async function runLocalBotTick(userId: string) {
       const gridOrders = open.filter((o: any) =>
         String(o.clientOrderId ?? "").startsWith(`grid_${symbolCfg.symbol}_`),
       );
-      const maxAllowedGridOrders = symbolCfg.symbol === BTC_SYMBOL ? maxOpenTrades : 1;
+      const configuredGridLevels = Math.max(1, Math.floor(Number(symbolCfg.grid_levels ?? 1)));
+      const expectedEntryOrders = symbolCfg.single_grid_order ? 1 : configuredGridLevels * 2;
+      // Allow one extra resting reduce-only take-profit when a position is open.
+      const maxAllowedGridOrders = expectedEntryOrders + 1;
       if (gridOrders.length > maxAllowedGridOrders) {
         await binance.cancelAllOrders(creds, symbolCfg.symbol);
         addLocalLog(
           userId,
           "info",
-          `Canceled ${gridOrders.length} extra grid order(s) before recreating the ${maxAllowedGridOrders}-slot BTC grid`,
+          `Canceled ${gridOrders.length} extra grid order(s) before recreating the ${maxAllowedGridOrders}-slot grid`,
           symbolCfg.symbol,
         );
       }
@@ -397,9 +391,7 @@ export function stopLocalBotRunner(userId: string) {
 export function bootstrapLocalBotRunners() {
   for (const userId of listLocalBotUserIds()) {
     const state = getLocalBotState(userId);
-    if (state.cfg.is_running && state.cfg.testnet === true) {
-      ensureLocalBotRunner(userId);
-    }
+    if (state.cfg.is_running) ensureLocalBotRunner(userId);
   }
 }
 

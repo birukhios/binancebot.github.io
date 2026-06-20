@@ -56,15 +56,23 @@ function localDashboardSnapshots() {
   return g.__localDashboardSnapshots;
 }
 
-function getLocalDashboardSnapshot(userId: string) {
-  return localDashboardSnapshots().get(userId) ?? null;
+function dashboardSnapshotKey(userId: string, testnet: boolean) {
+  return `${userId}:${testnet ? "testnet" : "mainnet"}`;
 }
 
 function setLocalDashboardSnapshot(
   userId: string,
+  testnet: boolean,
   snapshot: Omit<LocalDashboardSnapshot, "updatedAt">,
 ) {
-  localDashboardSnapshots().set(userId, { ...snapshot, updatedAt: Date.now() });
+  localDashboardSnapshots().set(dashboardSnapshotKey(userId, testnet), {
+    ...snapshot,
+    updatedAt: Date.now(),
+  });
+}
+
+function getLocalDashboardSnapshot(userId: string, testnet: boolean) {
+  return localDashboardSnapshots().get(dashboardSnapshotKey(userId, testnet)) ?? null;
 }
 
 function hasRemoteDb() {
@@ -163,7 +171,8 @@ async function localStartRiskBlock(userId: string, creds: BinanceCreds) {
 async function localDashboardFallback(userId: string) {
   const local = getLocalBotState(userId);
   if (local.cfg.is_running) ensureLocalBotRunner(userId);
-  const snapshot = getLocalDashboardSnapshot(userId);
+  const testnet = Boolean(local.cfg.testnet ?? true);
+  const snapshot = getLocalDashboardSnapshot(userId, testnet);
   const snapshotFresh = snapshot ? Date.now() - snapshot.updatedAt < 60_000 : false;
   const mainnetCreds = localBinanceCredsForUser(userId);
   const credsStatus = {
@@ -180,9 +189,10 @@ async function localDashboardFallback(userId: string) {
     : {};
   const marketSession = getMarketSession();
 
-  if (credsStatus.testnet) {
+  const hasSelectedCreds = testnet ? credsStatus.testnet : credsStatus.mainnet;
+  if (hasSelectedCreds) {
     try {
-      const creds = await getCredsForUser(userId, true);
+      const creds = await getCredsForUser(userId, testnet);
       const sinceMs = (() => {
         const d = new Date();
         d.setUTCHours(0, 0, 0, 0);
@@ -318,7 +328,7 @@ async function localDashboardFallback(userId: string) {
           estMakerFeeUsdt: Number(o.origQty ?? 0) * Number(o.price ?? 0) * FUTURES_MAKER_FEE_RATE,
         }));
 
-      setLocalDashboardSnapshot(userId, {
+      setLocalDashboardSnapshot(userId, testnet, {
         account,
         positions,
         openOrders,
@@ -326,7 +336,7 @@ async function localDashboardFallback(userId: string) {
         trendBias,
       });
     } catch (e) {
-      error = formatBinanceError(e, true);
+      error = formatBinanceError(e, testnet);
       if (snapshotFresh) {
         account = account ?? snapshot?.account ?? null;
         positions = positions.length > 0 ? positions : [...(snapshot?.positions ?? [])];
@@ -340,7 +350,7 @@ async function localDashboardFallback(userId: string) {
   }
 
   if (!snapshotFresh && (positions.length > 0 || openOrders.length > 0 || account)) {
-    setLocalDashboardSnapshot(userId, {
+    setLocalDashboardSnapshot(userId, testnet, {
       account,
       positions,
       openOrders,
@@ -355,6 +365,7 @@ async function localDashboardFallback(userId: string) {
     account,
     positions,
     openOrders,
+    snapshotAt: new Date().toISOString(),
     error,
     realizedToday,
     credsStatus,
@@ -586,6 +597,7 @@ export const getDashboard = createServerFn({ method: "GET" })
       account,
       positions,
       openOrders,
+      snapshotAt: new Date().toISOString(),
       error,
       realizedToday,
       credsStatus,
@@ -600,7 +612,8 @@ export const getTrades = createServerFn({ method: "GET" })
   .handler(async ({ context }) => {
     if (!hasRemoteDb()) {
       const local = getLocalBotState(context.userId);
-      const creds = await getCredsForUser(context.userId, true);
+      const testnet = Boolean(local.cfg.testnet ?? true);
+      const creds = await getCredsForUser(context.userId, testnet);
       const enabledSymbols = local.symbols.filter((s) => s.enabled).map((s) => s.symbol);
       const symbols =
         enabledSymbols.length > 0 ? enabledSymbols : local.symbols.map((s) => s.symbol);

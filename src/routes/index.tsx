@@ -52,6 +52,7 @@ export const Route = createFileRoute("/")({
 type ClientSession = {
   user?: {
     id?: string;
+    email?: string;
   };
 } | null;
 
@@ -101,10 +102,12 @@ function Dashboard() {
     enabled: !!sessionUserId,
     retry: false,
     placeholderData: (previous) => previous,
-    staleTime: 10_000,
-    refetchInterval: (query) => (query.state.error ? false : 3000),
+    staleTime: 0,
+    refetchInterval: (query) => (query.state.error ? false : 1500),
     refetchIntervalInBackground: true,
-    refetchOnWindowFocus: false,
+    refetchOnWindowFocus: true,
+    refetchOnMount: "always",
+    refetchOnReconnect: true,
   });
   const trades = useQuery({
     queryKey: ["trades", sessionUserId],
@@ -147,6 +150,11 @@ function Dashboard() {
   const saveCredsFn = useServerFn(saveBinanceCreds);
   const learnFn = useServerFn(learnSymbol);
   const applyHighRiskFn = useServerFn(applyPaperHighRiskProfile);
+  const toggleEnvironment = async (checked: boolean) => {
+    if (!checked && !confirm("Switch to LIVE trading? The bot will stop.")) return;
+    await toggleTestnet({ data: { testnet: checked } });
+    invalidate();
+  };
 
   const startStopMut = useMutation({
     mutationFn: (running: boolean) => startStop({ data: { running } }),
@@ -241,8 +249,14 @@ function Dashboard() {
   const positions = dash.data?.positions ?? [];
   const openOrders = dash.data?.openOrders ?? [];
   const symbols = dash.data?.symbols ?? [];
+  const dashboardSnapshotAt = dash.data?.snapshotAt ?? null;
   const credsStatus = dash.data?.credsStatus;
   const credsReady = cfg?.testnet ? !!credsStatus?.testnet : !!credsStatus?.mainnet;
+  const isTestnet = cfg?.testnet ?? true;
+  const environmentLabel = isTestnet ? "TESTNET" : "LIVE";
+  const environmentDescription = isTestnet
+    ? "Use paper/testnet trading"
+    : "Use live/mainnet trading";
   const isDashRefreshing = dash.isFetching && !!dash.data;
   const grossUnrealized = positions.reduce(
     (sum: number, p: any) => sum + Number(p.unrealizedProfit ?? 0),
@@ -269,7 +283,7 @@ function Dashboard() {
           <div>
             <h1 className="text-2xl font-bold">Grid Trading Bot</h1>
             <p className="text-sm text-muted-foreground">
-              {session.data?.user.email ?? "Signed in"} · {cfg?.testnet ? "TESTNET" : "MAINNET"} ·{" "}
+              {session.data?.user?.email ?? "Signed in"} · {environmentLabel} ·{" "}
               {cfg?.is_running ? (
                 <span className="text-green-600">RUNNING</span>
               ) : (
@@ -290,7 +304,19 @@ function Dashboard() {
               )}
             </p>
           </div>
-          <div className="flex gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="flex items-center gap-3 rounded-lg border bg-card px-3 py-2">
+              <div className="leading-tight">
+                <Label className="text-xs uppercase tracking-wide text-muted-foreground">
+                  Trading mode
+                </Label>
+                <div className="text-sm font-medium">{environmentLabel}</div>
+              </div>
+              <Switch
+                checked={cfg?.testnet ?? true}
+                onCheckedChange={toggleEnvironment}
+              />
+            </div>
             <Button
               variant="outline"
               size="sm"
@@ -550,7 +576,18 @@ function Dashboard() {
             </Card>
             <Card>
               <CardHeader>
-                <CardTitle>Open grid orders</CardTitle>
+                <div className="flex items-center justify-between gap-3">
+                  <CardTitle>Open grid orders</CardTitle>
+                  <div className="text-right text-xs text-muted-foreground">
+                    <div>{openOrders.length} live order{openOrders.length === 1 ? "" : "s"}</div>
+                    <div>
+                      Sync:{" "}
+                      {dashboardSnapshotAt
+                        ? new Date(dashboardSnapshotAt).toLocaleTimeString()
+                        : "—"}
+                    </div>
+                  </div>
+                </div>
               </CardHeader>
               <CardContent>
                 {openOrders.length === 0 ? (
@@ -783,19 +820,15 @@ function Dashboard() {
               <CardContent className="space-y-6">
                 <div className="flex items-center justify-between">
                   <div>
-                    <Label>Testnet mode</Label>
+                    <Label>Trading mode</Label>
                     <p className="text-sm text-muted-foreground">
-                      Switching environments stops the bot and requires the matching API keys.
+                      {environmentDescription}. Switching environments stops the bot and requires
+                      the matching API keys.
                     </p>
                   </div>
                   <Switch
                     checked={cfg?.testnet ?? true}
-                    onCheckedChange={async (checked) => {
-                      if (!checked && !confirm("Switch to MAINNET (real money)? Bot will stop."))
-                        return;
-                      await toggleTestnet({ data: { testnet: checked } });
-                      invalidate();
-                    }}
+                    onCheckedChange={toggleEnvironment}
                   />
                 </div>
                 <div className="rounded-md border border-amber-500/30 bg-amber-500/5 p-4 space-y-3">
