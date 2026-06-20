@@ -34,6 +34,13 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
   Table,
   TableBody,
   TableCell,
@@ -57,6 +64,14 @@ type ClientSession = {
 } | null;
 
 type ThemeMode = "light" | "dark";
+type TradeSide = "all" | "BUY" | "SELL";
+type TradesPage = {
+  items: any[];
+  total: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
+};
 
 async function fetchClientSession(): Promise<ClientSession> {
   const res = await fetch("/api/session", { credentials: "include" });
@@ -73,6 +88,10 @@ function Dashboard() {
     if (stored === "light" || stored === "dark") return stored;
     return window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light";
   });
+  const [tradeSymbol, setTradeSymbol] = useState("all");
+  const [tradeSide, setTradeSide] = useState<TradeSide>("all");
+  const [tradePage, setTradePage] = useState(1);
+  const [tradePageSize, setTradePageSize] = useState(20);
 
   useEffect(() => {
     const root = document.documentElement;
@@ -92,6 +111,10 @@ function Dashboard() {
     if (session.isSuccess && !sessionUserId) qc.clear();
   }, [qc, session.isSuccess, sessionUserId]);
 
+  useEffect(() => {
+    setTradePage(1);
+  }, [tradeSymbol, tradeSide, tradePageSize]);
+
   const dashFn = useServerFn(getDashboard);
   const tradesFn = useServerFn(getTrades);
   const logsFn = useServerFn(getLogs);
@@ -109,11 +132,20 @@ function Dashboard() {
     refetchOnMount: "always",
     refetchOnReconnect: true,
   });
-  const trades = useQuery({
-    queryKey: ["trades", sessionUserId],
-    queryFn: () => tradesFn(),
+  const trades = useQuery<TradesPage>({
+    queryKey: ["trades", sessionUserId, tradeSymbol, tradeSide, tradePage, tradePageSize],
+    queryFn: () =>
+      tradesFn({
+        data: {
+          page: tradePage,
+          pageSize: tradePageSize,
+          symbol: tradeSymbol,
+          side: tradeSide,
+        },
+      }),
     enabled: !!sessionUserId,
     retry: false,
+    placeholderData: (previous) => previous,
   });
   const logs = useQuery({
     queryKey: ["logs", sessionUserId],
@@ -258,6 +290,10 @@ function Dashboard() {
     ? "Use paper/testnet trading"
     : "Use live/mainnet trading";
   const isDashRefreshing = dash.isFetching && !!dash.data;
+  const tradeRows = trades.data?.items ?? [];
+  const tradeMeta = trades.data ?? null;
+  const tradeStart = tradeMeta && tradeMeta.total > 0 ? (tradeMeta.page - 1) * tradeMeta.pageSize + 1 : 0;
+  const tradeEnd = tradeMeta ? tradeStart + tradeRows.length - 1 : 0;
   const grossUnrealized = positions.reduce(
     (sum: number, p: any) => sum + Number(p.unrealizedProfit ?? 0),
     0,
@@ -727,7 +763,67 @@ function Dashboard() {
 
           <TabsContent value="trades">
             <Card>
-              <CardContent className="pt-6">
+              <CardContent className="space-y-4 pt-6">
+                <div className="flex flex-wrap items-end gap-3">
+                  <div className="space-y-1">
+                    <Label className="text-xs">Symbol</Label>
+                    <Select value={tradeSymbol} onValueChange={setTradeSymbol}>
+                      <SelectTrigger className="w-44">
+                        <SelectValue placeholder="All symbols" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">All symbols</SelectItem>
+                        {symbols.map((s: any) => (
+                          <SelectItem key={s.symbol} value={s.symbol}>
+                            {s.symbol}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-1">
+                    <Label className="text-xs">Side</Label>
+                    <Select
+                      value={tradeSide}
+                      onValueChange={(value) => setTradeSide(value as TradeSide)}
+                    >
+                      <SelectTrigger className="w-36">
+                        <SelectValue placeholder="All sides" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">All sides</SelectItem>
+                        <SelectItem value="BUY">BUY</SelectItem>
+                        <SelectItem value="SELL">SELL</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-1">
+                    <Label className="text-xs">Per page</Label>
+                    <Select
+                      value={String(tradePageSize)}
+                      onValueChange={(value) => setTradePageSize(Number(value))}
+                    >
+                      <SelectTrigger className="w-36">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="10">10</SelectItem>
+                        <SelectItem value="20">20</SelectItem>
+                        <SelectItem value="50">50</SelectItem>
+                        <SelectItem value="100">100</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="ml-auto text-right text-xs text-muted-foreground">
+                    <div>
+                      {tradeMeta?.total ?? 0} trade{(tradeMeta?.total ?? 0) === 1 ? "" : "s"}
+                    </div>
+                    <div>
+                      {tradeMeta?.total ? `${tradeStart}-${tradeEnd}` : "0"} of{" "}
+                      {tradeMeta?.total ?? 0}
+                    </div>
+                  </div>
+                </div>
                 <Table>
                   <TableHeader>
                     <TableRow>
@@ -742,7 +838,7 @@ function Dashboard() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {(trades.data ?? []).map((t: any) => {
+                    {tradeRows.map((t: any) => {
                       const gross = Number(t.realized_pnl ?? 0);
                       const commission = Number(t.commission ?? 0);
                       const net = gross - commission;
@@ -769,15 +865,40 @@ function Dashboard() {
                         </TableRow>
                       );
                     })}
-                    {(trades.data ?? []).length === 0 && (
+                    {tradeRows.length === 0 && (
                       <TableRow>
                         <TableCell colSpan={8} className="text-center text-muted-foreground">
-                          No trades yet
+                          No trades match the current filters
                         </TableCell>
                       </TableRow>
                     )}
                   </TableBody>
                 </Table>
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <p className="text-xs text-muted-foreground">
+                    Page {tradeMeta?.page ?? 1} of {tradeMeta?.totalPages ?? 1}
+                  </p>
+                  <div className="flex gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={(tradeMeta?.page ?? 1) <= 1 || trades.isFetching}
+                      onClick={() => setTradePage((page) => Math.max(1, page - 1))}
+                    >
+                      Previous
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={(tradeMeta?.page ?? 1) >= (tradeMeta?.totalPages ?? 1) || trades.isFetching}
+                      onClick={() =>
+                        setTradePage((page) => Math.min(tradeMeta?.totalPages ?? 1, page + 1))
+                      }
+                    >
+                      Next
+                    </Button>
+                  </div>
+                </div>
               </CardContent>
             </Card>
           </TabsContent>

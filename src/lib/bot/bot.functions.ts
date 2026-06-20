@@ -607,9 +607,36 @@ export const getDashboard = createServerFn({ method: "GET" })
     };
   });
 
+const tradesQuerySchema = z.object({
+  page: z.number().int().min(1).default(1),
+  pageSize: z.number().int().min(1).max(100).default(20),
+  symbol: z.string().trim().optional().default("all"),
+  side: z.enum(["all", "BUY", "SELL"]).default("all"),
+});
+
 export const getTrades = createServerFn({ method: "GET" })
   .middleware([requireAuth])
-  .handler(async ({ context }) => {
+  .inputValidator((d: z.infer<typeof tradesQuerySchema>) => tradesQuerySchema.parse(d))
+  .handler(async ({ context, data: input }) => {
+    const page = input?.page ?? 1;
+    const pageSize = input?.pageSize ?? 20;
+    const symbolFilter = input?.symbol ?? "all";
+    const sideFilter = input?.side ?? "all";
+
+    const filterTrades = (rows: any[]) => {
+      const filtered = rows.filter((trade) => {
+        if (symbolFilter !== "all" && trade.symbol !== symbolFilter) return false;
+        if (sideFilter !== "all" && trade.side !== sideFilter) return false;
+        return true;
+      });
+      const total = filtered.length;
+      const totalPages = Math.max(1, Math.ceil(total / pageSize));
+      const currentPage = Math.min(page, totalPages);
+      const start = (currentPage - 1) * pageSize;
+      const items = filtered.slice(start, start + pageSize);
+      return { items, total, page: currentPage, pageSize, totalPages };
+    };
+
     if (!hasRemoteDb()) {
       const local = getLocalBotState(context.userId);
       const testnet = Boolean(local.cfg.testnet ?? true);
@@ -628,7 +655,7 @@ export const getTrades = createServerFn({ method: "GET" })
           }),
         )
       ).flat();
-      return trades
+      const normalized = trades
         .map((t: any) => ({
           id: `${t.symbol}-${t.id}`,
           symbol: t.symbol,
@@ -643,15 +670,31 @@ export const getTrades = createServerFn({ method: "GET" })
         }))
         .sort((a, b) => new Date(b.filled_at).getTime() - new Date(a.filled_at).getTime())
         .slice(0, 200);
+      return filterTrades(normalized);
     }
 
-    const { data } = await remoteDb
+    let dbQuery = remoteDb
       .from("trades")
-      .select("*")
+      .select("*", { count: "exact" })
       .eq("user_id", context.userId)
-      .order("filled_at", { ascending: false })
-      .limit(200);
-    return data ?? [];
+      .order("filled_at", { ascending: false });
+
+    if (symbolFilter !== "all") dbQuery = dbQuery.eq("symbol", symbolFilter);
+    if (sideFilter !== "all") dbQuery = dbQuery.eq("side", sideFilter);
+
+    const from = (page - 1) * pageSize;
+    const to = from + pageSize - 1;
+    const { data: rows, count } = await dbQuery.range(from, to);
+    const total = count ?? rows?.length ?? 0;
+    const totalPages = Math.max(1, Math.ceil(total / pageSize));
+
+    return {
+      items: rows ?? [],
+      total,
+      page: Math.min(page, totalPages),
+      pageSize,
+      totalPages,
+    };
   });
 
 export const getLogs = createServerFn({ method: "GET" })
