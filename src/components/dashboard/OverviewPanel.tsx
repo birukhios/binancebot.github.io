@@ -3,6 +3,7 @@ import { Badge } from "@/components/ui/badge";
 import { KpiStrip } from "./KpiStrip";
 import { PositionsTable } from "./PositionsTable";
 import { OrdersTable } from "./OrdersTable";
+import { RealizedPnlPanel } from "./RealizedPnlPanel";
 
 export function OverviewPanel({
   dash,
@@ -40,6 +41,8 @@ export function OverviewPanel({
         realizedToday={dash?.realizedToday ?? 0}
         estFees={estCloseFees + estOpenOrderFees}
       />
+
+      <RealizedPnlPanel realizedToday={dash?.realizedToday ?? 0} />
 
       <Card>
         <CardHeader className="pb-3">

@@ -347,6 +347,8 @@ const tradesQuerySchema = z.object({
   pageSize: z.number().int().min(1).max(100).default(20),
   symbol: z.string().trim().optional().default("all"),
   side: z.enum(["all", "BUY", "SELL"]).default("all"),
+  startDate: z.string().optional(),
+  endDate: z.string().optional(),
 });
 
 export const getTrades = createServerFn({ method: "GET" })
@@ -357,11 +359,17 @@ export const getTrades = createServerFn({ method: "GET" })
     const pageSize = input?.pageSize ?? 20;
     const symbolFilter = input?.symbol ?? "all";
     const sideFilter = input?.side ?? "all";
+    const startMs = input?.startDate ? new Date(input.startDate).getTime() : 0;
+    const endMs = input?.endDate ? new Date(input.endDate).getTime() + 86400000 : Infinity;
 
     const filterTrades = (rows: any[]) => {
       const filtered = rows.filter((trade) => {
         if (symbolFilter !== "all" && trade.symbol !== symbolFilter) return false;
         if (sideFilter !== "all" && trade.side !== sideFilter) return false;
+        if (startMs > 0 || endMs < Infinity) {
+          const t = new Date(trade.filled_at).getTime();
+          if (t < startMs || t > endMs) return false;
+        }
         return true;
       });
       const total = filtered.length;

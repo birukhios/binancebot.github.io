@@ -179,10 +179,10 @@ export function useDashboardMutations(sessionUserId: string | null) {
 export function useTradesQuery(
   sessionUserId: string | null,
   tradesFn: ReturnType<typeof useServerFn<typeof getTrades>>,
-  filters: { symbol: string; side: TradeSide; page: number; pageSize: number },
+  filters: { symbol: string; side: TradeSide; page: number; pageSize: number; startDate?: string; endDate?: string },
 ) {
   return useQuery({
-    queryKey: ["trades", sessionUserId, filters.symbol, filters.side, filters.page, filters.pageSize],
+    queryKey: ["trades", sessionUserId, filters.symbol, filters.side, filters.page, filters.pageSize, filters.startDate, filters.endDate],
     queryFn: () =>
       tradesFn({
         data: {
@@ -190,6 +190,8 @@ export function useTradesQuery(
           pageSize: filters.pageSize,
           symbol: filters.symbol,
           side: filters.side,
+          startDate: filters.startDate,
+          endDate: filters.endDate,
         },
       }),
     enabled: !!sessionUserId,

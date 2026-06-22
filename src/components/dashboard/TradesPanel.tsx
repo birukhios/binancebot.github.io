@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
@@ -10,7 +11,7 @@ import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
 import { useTradesQuery } from "@/hooks/use-dashboard-data";
-import { num } from "./KpiStrip";
+import { num, pnlColor } from "./KpiStrip";
 
 type TradeSide = "all" | "BUY" | "SELL";
 
@@ -27,23 +28,36 @@ export function TradesPanel({
   const [side, setSide] = useState<TradeSide>("all");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
+  const [startDate, setStartDate] = useState("");
+  const [endDate, setEndDate] = useState("");
 
-  useEffect(() => { setPage(1); }, [symbol, side, pageSize]);
+  useEffect(() => { setPage(1); }, [symbol, side, pageSize, startDate, endDate]);
 
-  const trades = useTradesQuery(sessionUserId, tradesFn, { symbol, side, page, pageSize });
+  const trades = useTradesQuery(sessionUserId, tradesFn, {
+    symbol, side, page, pageSize,
+    startDate: startDate || undefined,
+    endDate: endDate || undefined,
+  });
   const rows = trades.data?.items ?? [];
   const meta = trades.data ?? null;
   const start = meta && meta.total > 0 ? (meta.page - 1) * meta.pageSize + 1 : 0;
   const end = meta ? start + rows.length - 1 : 0;
 
+  const totalPnl = rows.reduce((s: number, t: any) => {
+    const gross = Number(t.realized_pnl ?? 0);
+    const commission = Number(t.commission ?? 0);
+    return s + gross - commission;
+  }, 0);
+
   return (
     <Card>
       <CardContent className="space-y-4 pt-5">
-        <div className="flex flex-wrap items-end gap-2 sm:gap-3">
-          <div className="w-full space-y-1 sm:w-auto">
+        {/* Filters row */}
+        <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:items-end sm:gap-3">
+          <div className="space-y-1">
             <Label className="text-xs">Symbol</Label>
             <Select value={symbol} onValueChange={setSymbol}>
-              <SelectTrigger className="w-full sm:w-40"><SelectValue placeholder="All" /></SelectTrigger>
+              <SelectTrigger className="w-full sm:w-36"><SelectValue placeholder="All" /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All symbols</SelectItem>
                 {symbols.map((s: any) => (
@@ -52,10 +66,10 @@ export function TradesPanel({
               </SelectContent>
             </Select>
           </div>
-          <div className="flex-1 space-y-1 sm:flex-none">
+          <div className="space-y-1">
             <Label className="text-xs">Side</Label>
             <Select value={side} onValueChange={(v) => setSide(v as TradeSide)}>
-              <SelectTrigger className="w-full sm:w-32"><SelectValue /></SelectTrigger>
+              <SelectTrigger className="w-full sm:w-28"><SelectValue /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All</SelectItem>
                 <SelectItem value="BUY">BUY</SelectItem>
@@ -63,10 +77,18 @@ export function TradesPanel({
               </SelectContent>
             </Select>
           </div>
-          <div className="flex-1 space-y-1 sm:flex-none">
+          <div className="space-y-1">
+            <Label className="text-xs">From</Label>
+            <Input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} className="h-9 w-full text-xs sm:w-36" />
+          </div>
+          <div className="space-y-1">
+            <Label className="text-xs">To</Label>
+            <Input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} className="h-9 w-full text-xs sm:w-36" />
+          </div>
+          <div className="space-y-1">
             <Label className="text-xs">Per page</Label>
             <Select value={String(pageSize)} onValueChange={(v) => setPageSize(Number(v))}>
-              <SelectTrigger className="w-full sm:w-24"><SelectValue /></SelectTrigger>
+              <SelectTrigger className="w-full sm:w-20"><SelectValue /></SelectTrigger>
               <SelectContent>
                 {[10, 20, 50, 100].map((n) => (
                   <SelectItem key={n} value={String(n)}>{n}</SelectItem>
@@ -74,10 +96,24 @@ export function TradesPanel({
               </SelectContent>
             </Select>
           </div>
-          <div className="ml-auto text-right text-xs text-muted-foreground">
+          {(startDate || endDate) && (
+            <Button variant="ghost" size="sm" className="h-9 text-xs" onClick={() => { setStartDate(""); setEndDate(""); }}>
+              Clear dates
+            </Button>
+          )}
+        </div>
+
+        {/* Summary bar */}
+        <div className="flex flex-wrap items-center gap-3 rounded-md border bg-muted/20 px-3 py-2 text-xs">
+          <span className="text-muted-foreground">
             {meta?.total ?? 0} trade{(meta?.total ?? 0) === 1 ? "" : "s"}
-            {meta?.total ? ` · ${start}–${end}` : ""}
-          </div>
+            {meta?.total ? ` · showing ${start}–${end}` : ""}
+          </span>
+          {rows.length > 0 && (
+            <span className={`ml-auto font-semibold ${pnlColor(totalPnl)}`}>
+              Page net: {totalPnl >= 0 ? "+" : ""}{totalPnl.toFixed(4)} USDT
+            </span>
+          )}
         </div>
 
         {/* Mobile card layout */}
@@ -99,9 +135,9 @@ export function TradesPanel({
                     <div className="text-muted-foreground">Price / Qty</div>
                     <div className="text-right">{num(t.price)} / {num(t.qty)}</div>
                     <div className="text-muted-foreground">Gross</div>
-                    <div className={`text-right ${gross >= 0 ? "text-green-600" : "text-destructive"}`}>{num(gross)}</div>
+                    <div className={`text-right ${pnlColor(gross)}`}>{num(gross)}</div>
                     <div className="text-muted-foreground">Net</div>
-                    <div className={`text-right ${net >= 0 ? "text-green-600" : "text-destructive"}`}>{num(net)}</div>
+                    <div className={`text-right ${pnlColor(net)}`}>{num(net)}</div>
                   </div>
                 </CardContent>
               </Card>
@@ -141,9 +177,9 @@ export function TradesPanel({
                     </TableCell>
                     <TableCell>{num(t.price)}</TableCell>
                     <TableCell>{num(t.qty)}</TableCell>
-                    <TableCell className={gross >= 0 ? "text-green-600" : "text-destructive"}>{num(gross)}</TableCell>
+                    <TableCell className={pnlColor(gross)}>{num(gross)}</TableCell>
                     <TableCell className="text-muted-foreground">{num(commission)}</TableCell>
-                    <TableCell className={net >= 0 ? "text-green-600" : "text-destructive"}>{num(net)}</TableCell>
+                    <TableCell className={pnlColor(net)}>{num(net)}</TableCell>
                   </TableRow>
                 );
               })}
