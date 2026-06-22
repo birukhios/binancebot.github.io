@@ -21,6 +21,7 @@ import {
   applyPaperHighRiskProfile,
   runAutoSelect,
   getNewsStatus,
+  getRealizedPnlHistory,
 } from "@/lib/bot/bot.functions";
 
 type TradeSide = "all" | "BUY" | "SELL";
@@ -69,7 +70,9 @@ export function useDashboardData(sessionUserId: string | null) {
     qc.invalidateQueries({ queryKey: ["logs"] });
   };
 
-  return { qc, dash, news, logs, tradesFn, invalidate };
+  const realizedPnlFn = useServerFn(getRealizedPnlHistory);
+
+  return { qc, dash, news, logs, tradesFn, realizedPnlFn, invalidate };
 }
 
 export function useDashboardMutations(sessionUserId: string | null) {

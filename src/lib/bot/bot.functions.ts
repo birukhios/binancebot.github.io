@@ -432,6 +432,38 @@ export const getTrades = createServerFn({ method: "GET" })
     };
   });
 
+export const getRealizedPnlHistory = createServerFn({ method: "GET" })
+  .middleware([requireAuth])
+  .validator(
+    (d: { startTime?: number; endTime?: number }) =>
+      z.object({ startTime: z.number().optional(), endTime: z.number().optional() }).parse(d),
+  )
+  .handler(async ({ data, context }) => {
+    const userId = context.userId;
+    const local = getLocalBotState(userId);
+    const testnet = Boolean(local.cfg.testnet ?? true);
+    const creds = await getCredsForUser(userId, testnet);
+    const now = Date.now();
+    const startTime = data.startTime ?? now - 24 * 60 * 60 * 1000;
+    const endTime = data.endTime ?? now;
+    const income = await binance
+      .income(creds, { startTime, endTime, limit: 1000 })
+      .catch(() => [] as any[]);
+    const relevant = income.filter((r: any) =>
+      ["REALIZED_PNL", "COMMISSION", "FUNDING_FEE"].includes(r.incomeType),
+    );
+    const total = relevant.reduce((s: number, r: any) => s + Number(r.income || 0), 0);
+    return {
+      total,
+      breakdown: relevant.map((r: any) => ({
+        symbol: r.symbol,
+        type: r.incomeType,
+        amount: Number(r.income || 0),
+        time: Number(r.time || 0),
+      })),
+    };
+  });
+
 export const getLogs = createServerFn({ method: "GET" })
   .middleware([requireAuth])
   .handler(async ({ context }) => {

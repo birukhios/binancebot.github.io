@@ -10,7 +10,7 @@ import {
   updateLocalSymbol,
 } from "@/lib/bot/local-bot-store.server";
 
-const LOOP_MS = Number(process.env.LOCAL_BOT_LOOP_MS ?? 30_000);
+const LOOP_MS = Number(process.env.LOCAL_BOT_LOOP_MS ?? 15_000);
 const BTC_SYMBOL = "BTCUSDT";
 const BTC_MAX_ENTRY_SLOTS = 4;
 const BTC_GRID_LEVELS = 2;

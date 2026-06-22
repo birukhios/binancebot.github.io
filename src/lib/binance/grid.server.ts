@@ -729,9 +729,10 @@ async function reconcileSymbolLocked(
     );
   }
 
+  let positionJustClosed = false;
   try {
     const closed = await maybeTakeProfit(userId, creds, cfg);
-    if (closed) return;
+    if (closed) positionJustClosed = true;
   } catch (e) {
     await botLog(
       userId,
@@ -741,16 +742,18 @@ async function reconcileSymbolLocked(
     );
   }
 
-  try {
-    const stopped = await maybeStopLoss(userId, creds, cfg);
-    if (stopped) return;
-  } catch (e) {
-    await botLog(
-      userId,
-      "warn",
-      `stop-loss check: ${(e as Error).message.slice(0, 160)}`,
-      cfg.symbol,
-    );
+  if (!positionJustClosed) {
+    try {
+      const stopped = await maybeStopLoss(userId, creds, cfg);
+      if (stopped) positionJustClosed = true;
+    } catch (e) {
+      await botLog(
+        userId,
+        "warn",
+        `stop-loss check: ${(e as Error).message.slice(0, 160)}`,
+        cfg.symbol,
+      );
+    }
   }
 
   const mp = await binance.markPrice(creds, cfg.symbol);
