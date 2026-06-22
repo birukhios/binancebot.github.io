@@ -32,7 +32,7 @@ const BTC_MAX_ENTRY_SLOTS = 4;
 const BTC_GRID_LEVELS = 2;
 const BTC_LEVERAGE = 3;
 const BTC_FAST_SPACING_PCT = 0.35;
-const BTC_MIN_ORDER_USDT = 300;
+const BTC_MIN_ORDER_USDT = 75;
 export const PAPER_HIGH_RISK_PROFILE = "paper_high_risk";
 
 type LocalLogOptions = {
@@ -88,13 +88,15 @@ function defaultUserStore(): LocalUserStore {
       risk_profile: "standard",
       bot_capital_pct: 30,
       daily_profit_target_pct: 2,
-      daily_loss_limit_pct: 1,
+      daily_loss_limit_pct: 3,
       max_open_trades: BTC_MAX_ENTRY_SLOTS,
-      consecutive_loss_pause_count: 3,
+      consecutive_loss_pause_count: 5,
       max_total_notional_usdt: 0,
       auto_select_enabled: false,
       auto_select_max_symbols: 1,
-      drawdown_pause_pct: 1,
+      drawdown_pause_pct: 5,
+      entry_pause_until_iso: null,
+      entry_pause_reason: null,
       news_pause_enabled: true,
       news_pause_window_min: 30,
       news_currencies: "USD",
@@ -139,8 +141,8 @@ function normalizeUserStore(user: LocalUserStore) {
     ? 4
     : Math.max(0, Number(user.cfg.daily_profit_target_pct ?? 2));
   user.cfg.daily_loss_limit_pct = paperHighRisk
-    ? 0.75
-    : Math.min(1, Math.max(0.1, Number(user.cfg.daily_loss_limit_pct ?? 1)));
+    ? 2
+    : Math.min(5, Math.max(0.1, Number(user.cfg.daily_loss_limit_pct ?? 3)));
   user.cfg.max_open_trades = paperHighRisk
     ? 2
     : Math.max(
@@ -151,46 +153,65 @@ function normalizeUserStore(user: LocalUserStore) {
         ),
       );
   user.cfg.consecutive_loss_pause_count = paperHighRisk
-    ? 1
-    : Math.max(1, Math.min(3, Math.floor(Number(user.cfg.consecutive_loss_pause_count ?? 3))));
+    ? 3
+    : Math.max(1, Math.min(10, Math.floor(Number(user.cfg.consecutive_loss_pause_count ?? 5))));
   user.cfg.auto_select_enabled = false;
   user.cfg.auto_select_max_symbols = 1;
   user.cfg.drawdown_pause_pct = paperHighRisk
-    ? 2
-    : Math.max(0.1, Number(user.cfg.drawdown_pause_pct ?? 1));
-  user.cfg.max_total_notional_usdt = Math.max(0, Number(user.cfg.max_total_notional_usdt ?? 0));
-  if (!user.symbols.some((symbol) => symbol.symbol === BTC_SYMBOL)) {
-    user.symbols.unshift(defaultSymbol(BTC_SYMBOL, true));
-  }
-  for (const symbol of user.symbols) {
-    symbol.grid_levels = symbol.symbol === BTC_SYMBOL ? BTC_GRID_LEVELS : 1;
-    symbol.enabled = symbol.symbol === BTC_SYMBOL ? Boolean(symbol.enabled ?? true) : false;
-    symbol.order_size_usdt = Math.max(75, Number(symbol.order_size_usdt ?? 0));
-    symbol.min_order_size_usdt = Math.max(50, Number(symbol.min_order_size_usdt ?? 0));
-    symbol.max_order_size_usdt = Math.max(150, Number(symbol.max_order_size_usdt ?? 0));
-    const stopLossRoi = Number(symbol.stop_loss_roi_pct ?? -50);
-    symbol.stop_loss_roi_pct = stopLossRoi < 0 ? stopLossRoi : -50;
-    if (symbol.symbol === BTC_SYMBOL) {
-      symbol.enabled = true;
-      symbol.grid_levels = paperHighRisk ? 3 : BTC_GRID_LEVELS;
-      symbol.grid_spacing_pct = paperHighRisk ? 0.25 : BTC_FAST_SPACING_PCT;
-      symbol.order_size_usdt = paperHighRisk
-        ? Math.max(500, Number(symbol.order_size_usdt ?? 0))
-        : Math.max(BTC_MIN_ORDER_USDT, Number(symbol.order_size_usdt ?? 0));
-      symbol.min_order_size_usdt = BTC_MIN_ORDER_USDT;
-      symbol.max_order_size_usdt = paperHighRisk
-        ? Math.max(2000, Number(symbol.max_order_size_usdt ?? 0))
-        : Math.max(BTC_MIN_ORDER_USDT, Number(symbol.max_order_size_usdt ?? 0));
-      symbol.leverage = paperHighRisk ? 8 : BTC_LEVERAGE;
+    ? 5
+    : Math.max(0.1, Number(user.cfg.drawdown_pause_pct ?? 5));
+  user.cfg.entry_pause_until_iso = user.cfg.entry_pause_until_iso ?? null;
+  user.cfg.entry_pause_reason = user.cfg.entry_pause_reason ?? null;
+    user.cfg.max_total_notional_usdt = Math.max(0, Number(user.cfg.max_total_notional_usdt ?? 0));
+    if (!user.symbols.some((symbol) => symbol.symbol === BTC_SYMBOL)) {
+      user.symbols.unshift(defaultSymbol(BTC_SYMBOL, true));
+    }
+    for (const symbol of user.symbols) {
+      const testnet = Boolean(user.cfg.testnet ?? true);
+      symbol.grid_levels = symbol.symbol === BTC_SYMBOL ? BTC_GRID_LEVELS : 1;
+      symbol.enabled = symbol.symbol === BTC_SYMBOL ? Boolean(symbol.enabled ?? true) : false;
+      const liveMinOrderUsdt = 5;
+      symbol.order_size_usdt =
+        symbol.symbol === BTC_SYMBOL && !testnet
+          ? Math.max(liveMinOrderUsdt, Number(symbol.order_size_usdt ?? 0))
+          : Math.max(75, Number(symbol.order_size_usdt ?? 0));
+      symbol.min_order_size_usdt =
+        symbol.symbol === BTC_SYMBOL && !testnet
+          ? Math.max(liveMinOrderUsdt, Number(symbol.min_order_size_usdt ?? 0))
+          : Math.max(50, Number(symbol.min_order_size_usdt ?? 0));
+      symbol.max_order_size_usdt =
+        symbol.symbol === BTC_SYMBOL && !testnet
+          ? Math.max(liveMinOrderUsdt, Number(symbol.max_order_size_usdt ?? 0))
+          : Math.max(150, Number(symbol.max_order_size_usdt ?? 0));
+      const stopLossRoi = Number(symbol.stop_loss_roi_pct ?? -50);
+      symbol.stop_loss_roi_pct = stopLossRoi < 0 ? stopLossRoi : -50;
+      if (symbol.symbol === BTC_SYMBOL) {
+        symbol.enabled = true;
+        symbol.grid_levels = paperHighRisk ? 3 : testnet ? BTC_GRID_LEVELS : 1;
+        symbol.single_grid_order = !paperHighRisk && !testnet;
+        symbol.grid_spacing_pct = paperHighRisk ? 0.25 : testnet ? BTC_FAST_SPACING_PCT : 0.5;
+        symbol.order_size_usdt = paperHighRisk
+          ? Math.max(500, Number(symbol.order_size_usdt ?? 0))
+          : Math.max(testnet ? BTC_MIN_ORDER_USDT : liveMinOrderUsdt, Number(symbol.order_size_usdt ?? 0));
+        symbol.min_order_size_usdt = testnet ? BTC_MIN_ORDER_USDT : liveMinOrderUsdt;
+        symbol.max_order_size_usdt = paperHighRisk
+          ? Math.max(2000, Number(symbol.max_order_size_usdt ?? 0))
+          : Math.max(testnet ? BTC_MIN_ORDER_USDT : liveMinOrderUsdt, Number(symbol.max_order_size_usdt ?? 0));
+        symbol.leverage = paperHighRisk ? 8 : testnet ? BTC_LEVERAGE : 2;
       symbol.stop_loss_roi_pct = paperHighRisk
         ? Math.max(-10, Math.min(-6, Number(symbol.stop_loss_roi_pct ?? -8)))
-        : Math.max(-20, Math.min(-6, Number(symbol.stop_loss_roi_pct ?? -12)));
+        : testnet
+          ? Math.max(-20, Math.min(-6, Number(symbol.stop_loss_roi_pct ?? -12)))
+          : Math.max(-12, Math.min(-6, Number(symbol.stop_loss_roi_pct ?? -8)));
       symbol.trend_filter_enabled = true;
       symbol.funding_filter_enabled = true;
-      symbol.z_filter_enabled = Boolean(symbol.z_filter_enabled ?? false);
+      symbol.funding_max_abs_bps = paperHighRisk ? 10 : testnet ? Number(symbol.funding_max_abs_bps ?? 10) : 8;
+      symbol.z_filter_enabled = Boolean(symbol.z_filter_enabled ?? !testnet);
       symbol.z_entry_threshold = paperHighRisk
         ? Math.max(1, Math.min(2, Number(symbol.z_entry_threshold ?? 1.25)))
-        : Math.max(1, Math.min(2.5, Number(symbol.z_entry_threshold ?? 1.0)));
+        : testnet
+          ? Math.max(1, Math.min(2.5, Number(symbol.z_entry_threshold ?? 1.0)))
+          : Math.max(1.2, Math.min(2.5, Number(symbol.z_entry_threshold ?? 1.4)));
     }
   }
 }
@@ -261,6 +282,23 @@ export function updateLocalSymbol(userId: string, symbol: string, patch: Record<
   normalizeUserStore(user);
   writeStore(store);
   return next;
+}
+
+export function adjustTestnetRealizedToday(userId: string, rawRealizedToday: number) {
+  const state = getLocalBotState(userId);
+  if (!Boolean(state.cfg.testnet ?? true)) return rawRealizedToday;
+
+  const baseline = Number(state.cfg.testnet_realized_baseline_usdt ?? Number.NaN);
+  const nowIso = now();
+  if (!Number.isFinite(baseline) || rawRealizedToday < baseline) {
+    updateLocalBotConfig(userId, {
+      testnet_realized_baseline_usdt: rawRealizedToday,
+      testnet_realized_baseline_updated_at: nowIso,
+    });
+    return 0;
+  }
+
+  return Math.max(0, rawRealizedToday - baseline);
 }
 
 export function addLocalLog(

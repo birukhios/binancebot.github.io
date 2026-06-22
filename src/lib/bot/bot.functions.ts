@@ -3,7 +3,6 @@ import { z } from "zod";
 import { requireAuth } from "@/lib/auth-middleware";
 import {
   binance,
-  binanceProxySource,
   formatBinanceError,
   getCredsForUser,
   isBinanceNetworkBlock,
@@ -20,6 +19,7 @@ import {
 import { localBinanceCredsForUser, saveLocalBinanceCreds } from "@/lib/binance/local-creds.server";
 import {
   addLocalLog,
+  adjustTestnetRealizedToday,
   applyPaperHighRiskProfile as applyLocalPaperHighRiskProfile,
   PAPER_HIGH_RISK_PROFILE,
   getLocalBotState,
@@ -32,140 +32,20 @@ import {
   stopLocalBotRunner,
 } from "@/lib/bot/local-runner.server";
 import { botLog } from "@/lib/bot/log.server";
+import { mapPositions, mapOpenOrders, FUTURES_MAKER_FEE_RATE } from "@/lib/bot/position-mapper.server";
+import {
+  setLocalDashboardSnapshot,
+  getLocalDashboardSnapshot,
+  binanceNetworkRouteStatus,
+  realizedTodayFromTradeHistory,
+  localStartRiskBlock,
+  botDayStartMs,
+} from "@/lib/bot/dashboard-helpers.server";
 
-const FUTURES_TAKER_FEE_RATE = 0.0004;
-const FUTURES_MAKER_FEE_RATE = 0.0002;
-const LOSS_STREAK_MIN_LOSS_USDT = 1;
-const VPNHOOD_REPO_URL = "https://github.com/vpnhood/vpnhood";
-let publicIpCache: { ip: string | null; expiresAt: number } | null = null;
 const remoteDb: any = null;
-type LocalDashboardSnapshot = {
-  account: any;
-  positions: any[];
-  openOrders: any[];
-  realizedToday: number;
-  trendBias: Record<string, "up" | "down" | "flat" | null>;
-  updatedAt: number;
-};
-
-function localDashboardSnapshots() {
-  const g = globalThis as typeof globalThis & {
-    __localDashboardSnapshots?: Map<string, LocalDashboardSnapshot>;
-  };
-  g.__localDashboardSnapshots ??= new Map();
-  return g.__localDashboardSnapshots;
-}
-
-function dashboardSnapshotKey(userId: string, testnet: boolean) {
-  return `${userId}:${testnet ? "testnet" : "mainnet"}`;
-}
-
-function setLocalDashboardSnapshot(
-  userId: string,
-  testnet: boolean,
-  snapshot: Omit<LocalDashboardSnapshot, "updatedAt">,
-) {
-  localDashboardSnapshots().set(dashboardSnapshotKey(userId, testnet), {
-    ...snapshot,
-    updatedAt: Date.now(),
-  });
-}
-
-function getLocalDashboardSnapshot(userId: string, testnet: boolean) {
-  return localDashboardSnapshots().get(dashboardSnapshotKey(userId, testnet)) ?? null;
-}
 
 function hasRemoteDb() {
   return false;
-}
-
-async function serverPublicIp() {
-  if (publicIpCache && publicIpCache.expiresAt > Date.now()) return publicIpCache.ip;
-  try {
-    const res = await fetch("https://api.ipify.org?format=json", {
-      signal: AbortSignal.timeout(2_000),
-      headers: { "user-agent": "crypto-caddie-demo/1.0" },
-    });
-    const json = (await res.json()) as { ip?: string };
-    const ip = typeof json.ip === "string" && json.ip.trim() ? json.ip.trim() : null;
-    publicIpCache = { ip, expiresAt: Date.now() + 60_000 };
-    return ip;
-  } catch {
-    publicIpCache = { ip: null, expiresAt: Date.now() + 30_000 };
-    return null;
-  }
-}
-
-async function binanceNetworkRouteStatus() {
-  const proxySource = binanceProxySource();
-  return {
-    proxyConfigured: Boolean(proxySource),
-    proxySource,
-    serverPublicIp: await serverPublicIp(),
-    vpnhoodRepoUrl: VPNHOOD_REPO_URL,
-  };
-}
-
-function botDayStartMs(now = new Date()) {
-  const start = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 7, 0, 0, 0);
-  return now.getTime() >= start ? start : start - 24 * 60 * 60 * 1000;
-}
-
-function nextBotDayStartIso(now = new Date()) {
-  return new Date(botDayStartMs(now) + 24 * 60 * 60 * 1000).toISOString();
-}
-
-async function localStartRiskBlock(userId: string, creds: BinanceCreds) {
-  const state = getLocalBotState(userId);
-  if (
-    state.cfg.risk_profile === PAPER_HIGH_RISK_PROFILE &&
-    state.cfg.paper_kill_switch_triggered_at &&
-    state.cfg.paper_kill_switch_reason
-  ) {
-    return `Paper high-risk profile is locked by a kill switch: ${state.cfg.paper_kill_switch_reason}. Re-apply the profile to reset it.`;
-  }
-  const [account, positions, income] = await Promise.all([
-    binance.account(creds),
-    binance.positionRisk(creds).catch(() => [] as any[]),
-    binance.income(creds, { startTime: botDayStartMs(), limit: 1000 }).catch(() => [] as any[]),
-  ]);
-
-  const walletBalance = Math.max(0, Number(account.totalWalletBalance ?? 0));
-  const botCapitalPct = Math.max(20, Math.min(40, Number(state.cfg.bot_capital_pct ?? 30)));
-  const configuredCap = Number(state.cfg.max_total_notional_usdt ?? 0);
-  const botCapital = walletBalance * (botCapitalPct / 100);
-  const effectiveCapital = configuredCap > 0 ? Math.min(configuredCap, botCapital) : botCapital;
-  const realized = income.reduce((sum: number, row: any) => {
-    const type = String(row.incomeType ?? "");
-    if (!["REALIZED_PNL", "COMMISSION", "FUNDING_FEE"].includes(type)) return sum;
-    return sum + Number(row.income ?? 0);
-  }, 0);
-  const unrealized = positions.reduce((sum: number, p: any) => {
-    if (Number(p.positionAmt) === 0) return sum;
-    return sum + Number(p.unRealizedProfit ?? p.unrealizedProfit ?? 0);
-  }, 0);
-  const pnl = realized + unrealized;
-  const dailyLossLimit =
-    effectiveCapital * (Math.max(0.1, Number(state.cfg.daily_loss_limit_pct ?? 1)) / 100);
-  if (dailyLossLimit > 0 && pnl <= -dailyLossLimit) {
-    return `Daily loss rule is active: today's PnL is ${pnl.toFixed(2)} USDT, below the -${dailyLossLimit.toFixed(2)} USDT limit. The bot can start again after ${nextBotDayStartIso()} UTC, or after you deliberately change the daily loss rule.`;
-  }
-
-  const realizedLosses = income
-    .filter((row: any) => String(row.incomeType ?? "") === "REALIZED_PNL")
-    .sort((a: any, b: any) => Number(b.time ?? 0) - Number(a.time ?? 0));
-  let consecutiveLosses = 0;
-  for (const row of realizedLosses) {
-    const value = Number(row.income ?? 0);
-    if (value <= -LOSS_STREAK_MIN_LOSS_USDT) consecutiveLosses++;
-    else if (value > 0) break;
-  }
-  const pauseCount = Math.max(1, Math.floor(Number(state.cfg.consecutive_loss_pause_count ?? 3)));
-  if (pnl < 0 && consecutiveLosses >= pauseCount) {
-    return `Loss-streak rule is active: ${consecutiveLosses} realized losses of at least ${LOSS_STREAK_MIN_LOSS_USDT.toFixed(2)} USDT in a row today while daily PnL is ${pnl.toFixed(2)} USDT. The bot is paused until the next bot day (${nextBotDayStartIso()} UTC).`;
-  }
-
-  return null;
 }
 
 async function localDashboardFallback(userId: string) {
@@ -193,13 +73,14 @@ async function localDashboardFallback(userId: string) {
   if (hasSelectedCreds) {
     try {
       const creds = await getCredsForUser(userId, testnet);
+      const symbolsForPnL = local.symbols.filter((s) => s.enabled).map((s) => s.symbol);
       const sinceMs = (() => {
         const d = new Date();
         d.setUTCHours(0, 0, 0, 0);
         return d.getTime();
       })();
       const accountUnavailable = (e: unknown) => creds.testnet && isBinanceNetworkBlock(e);
-      const [acct, risk, premium, income, liveOrders] = await Promise.all([
+      const [acct, risk, premium, liveOrders, realizedTradesToday, income] = await Promise.all([
         binance.account(creds).catch((e) => {
           if (accountUnavailable(e)) return null;
           throw e;
@@ -209,13 +90,20 @@ async function localDashboardFallback(userId: string) {
           throw e;
         }),
         binance.premiumIndexAll(creds).catch(() => [] as any[]),
-        binance.income(creds, { startTime: sinceMs, limit: 1000 }).catch(() => [] as any[]),
         binance.openOrders(creds).catch(() => [] as any[]),
+        realizedTodayFromTradeHistory(creds, symbolsForPnL, sinceMs),
+        binance.income(creds, { startTime: sinceMs, limit: 1000 }).catch(() => [] as any[]),
       ]);
 
-      realizedToday = (income ?? [])
+      const rawRealizedToday = (income ?? [])
         .filter((r) => ["REALIZED_PNL", "COMMISSION", "FUNDING_FEE"].includes(r.incomeType))
         .reduce((s, r) => s + Number(r.income || 0), 0);
+      realizedToday = realizedTradesToday !== 0 ? realizedTradesToday : rawRealizedToday;
+      if (testnet) {
+        realizedToday = realizedTradesToday;
+      } else {
+        realizedToday = adjustTestnetRealizedToday(userId, realizedToday);
+      }
 
       const marginBalance = parseFloat(acct?.totalMarginBalance ?? "0") || 0;
       account = acct
@@ -226,9 +114,6 @@ async function localDashboardFallback(userId: string) {
             availableBalance: acct.availableBalance,
           }
         : null;
-      const acctByKey = new Map<string, any>(
-        (acct?.positions ?? []).map((p: any) => [`${p.symbol}:${p.positionSide}`, p]),
-      );
       const premiumBySym = new Map<string, any>((premium ?? []).map((p) => [p.symbol, p]));
       const symConfigBySymbol = new Map<string, any>(local.symbols.map((s) => [s.symbol, s]));
 
@@ -252,81 +137,8 @@ async function localDashboardFallback(userId: string) {
           }),
       );
 
-      positions = (risk ?? [])
-        .filter((p: any) => parseFloat(p.positionAmt) !== 0)
-        .map((p: any) => {
-          const amt = parseFloat(p.positionAmt);
-          const entry = parseFloat(p.entryPrice) || 0;
-          const premiumMark = parseFloat(premiumBySym.get(p.symbol)?.markPrice ?? "0") || 0;
-          const mark = premiumMark > 0 ? premiumMark : parseFloat(p.markPrice) || 0;
-          const upnl =
-            entry > 0 && mark > 0 ? (mark - entry) * amt : parseFloat(p.unRealizedProfit) || 0;
-          const notional = Math.abs(amt * mark) || Math.abs(parseFloat(p.notional ?? "0")) || 0;
-          const estCloseFeeUsdt = notional * FUTURES_TAKER_FEE_RATE;
-          const estRoundTripFeeUsdt = notional * (FUTURES_TAKER_FEE_RATE + FUTURES_MAKER_FEE_RATE);
-          const netUnrealizedAfterCloseFee = upnl - estCloseFeeUsdt;
-          const leverage = parseFloat(p.leverage) || 1;
-          const initialMargin = leverage > 0 ? notional / leverage : 0;
-          const roiPct = initialMargin > 0 ? (upnl / initialMargin) * 100 : 0;
-          const netRoiPct =
-            initialMargin > 0 ? (netUnrealizedAfterCloseFee / initialMargin) * 100 : 0;
-          const acctPos = acctByKey.get(`${p.symbol}:${p.positionSide}`);
-          const maintMargin = parseFloat(acctPos?.maintMargin ?? "0") || 0;
-          const isolated = p.marginType === "isolated";
-          const isolatedWallet = parseFloat(p.isolatedWallet ?? "0") || 0;
-          const denom = isolated ? isolatedWallet + upnl : marginBalance;
-          const marginRatioPct = denom > 0 ? (maintMargin / denom) * 100 : 0;
-          const fundingRate = parseFloat(premiumBySym.get(p.symbol)?.lastFundingRate ?? "0") || 0;
-          const estFundingFee = notional * fundingRate * (amt >= 0 ? -1 : 1);
-          const nextFundingTime = premiumBySym.get(p.symbol)?.nextFundingTime ?? null;
-          const symCfg = symConfigBySymbol.get(p.symbol);
-          const spacingPct = Number(symCfg?.grid_spacing_pct ?? 0);
-          const tpTargetUsdt = notional * (spacingPct / 100);
-          const tpTargetPrice =
-            spacingPct > 0 && entry > 0
-              ? entry * (1 + ((amt >= 0 ? 1 : -1) * spacingPct) / 100)
-              : null;
-          return {
-            symbol: p.symbol,
-            positionAmt: p.positionAmt,
-            entryPrice: p.entryPrice,
-            breakEvenPrice: p.breakEvenPrice ?? null,
-            markPrice: String(mark),
-            liquidationPrice: p.liquidationPrice,
-            marginRatioPct,
-            marginType: p.marginType,
-            isolatedMargin: p.isolatedMargin,
-            initialMargin,
-            unrealizedProfit: String(upnl),
-            roiPct,
-            estCloseFeeUsdt,
-            estRoundTripFeeUsdt,
-            netUnrealizedAfterCloseFee,
-            netRoiPct,
-            leverage: p.leverage,
-            notional,
-            estFundingFee,
-            fundingRate,
-            nextFundingTime,
-            tpTargetUsdt,
-            tpTargetPrice,
-          };
-        });
-
-      openOrders = (liveOrders ?? [])
-        .filter((o: any) => String(o.clientOrderId ?? "").startsWith(`grid_${o.symbol}_`))
-        .map((o: any) => ({
-          symbol: o.symbol,
-          side: o.side,
-          price: o.price,
-          origQty: o.origQty,
-          executedQty: o.executedQty,
-          status: o.status,
-          orderId: o.orderId,
-          clientOrderId: o.clientOrderId,
-          notional: Number(o.origQty ?? 0) * Number(o.price ?? 0),
-          estMakerFeeUsdt: Number(o.origQty ?? 0) * Number(o.price ?? 0) * FUTURES_MAKER_FEE_RATE,
-        }));
+      positions = mapPositions(risk ?? [], premium ?? [], acct?.positions ?? [], marginBalance, symConfigBySymbol);
+      openOrders = mapOpenOrders(liveOrders ?? []);
 
       setLocalDashboardSnapshot(userId, testnet, {
         account,
@@ -341,7 +153,7 @@ async function localDashboardFallback(userId: string) {
         account = account ?? snapshot?.account ?? null;
         positions = positions.length > 0 ? positions : [...(snapshot?.positions ?? [])];
         openOrders = openOrders.length > 0 ? openOrders : [...(snapshot?.openOrders ?? [])];
-        realizedToday = realizedToday || snapshot?.realizedToday || 0;
+      realizedToday = realizedToday || snapshot?.realizedToday || 0;
         for (const [symbol, bias] of Object.entries(snapshot?.trendBias ?? {})) {
           if (!(symbol in trendBias)) trendBias[symbol] = bias;
         }
@@ -453,9 +265,10 @@ export const getDashboard = createServerFn({ method: "GET" })
         binance.openOrders(creds).catch(() => [] as any[]),
       ]);
       // Net realized = REALIZED_PNL + COMMISSION (negative) + FUNDING_FEE
-      realizedTodayBinance = (income ?? [])
+      const rawRealizedToday = (income ?? [])
         .filter((r) => ["REALIZED_PNL", "COMMISSION", "FUNDING_FEE"].includes(r.incomeType))
         .reduce((s, r) => s + Number(r.income || 0), 0);
+      realizedTodayBinance = adjustTestnetRealizedToday(userId, rawRealizedToday);
       const marginBalance = parseFloat(acct?.totalMarginBalance ?? "0") || 0;
       account = acct
         ? {
@@ -465,9 +278,6 @@ export const getDashboard = createServerFn({ method: "GET" })
             availableBalance: acct.availableBalance,
           }
         : null;
-      const acctByKey = new Map<string, any>(
-        (acct?.positions ?? []).map((p: any) => [`${p.symbol}:${p.positionSide}`, p]),
-      );
       const premiumBySym = new Map<string, any>((premium ?? []).map((p) => [p.symbol, p]));
       const symConfigBySymbol = new Map<string, any>((symbols ?? []).map((s) => [s.symbol, s]));
 
@@ -492,83 +302,8 @@ export const getDashboard = createServerFn({ method: "GET" })
           );
         }),
       );
-      positions = (risk ?? [])
-        .filter((p: any) => parseFloat(p.positionAmt) !== 0)
-        .map((p: any) => {
-          const amt = parseFloat(p.positionAmt);
-          const entry = parseFloat(p.entryPrice) || 0;
-          // Prefer the fresher mark from premiumIndex (updates ~1s) over
-          // positionRisk's snapshot which can lag several seconds.
-          const premiumMark = parseFloat(premiumBySym.get(p.symbol)?.markPrice ?? "0") || 0;
-          const mark = premiumMark > 0 ? premiumMark : parseFloat(p.markPrice) || 0;
-          // Recompute uPnL from the fresh mark so the UI matches Binance live.
-          const upnl =
-            entry > 0 && mark > 0 ? (mark - entry) * amt : parseFloat(p.unRealizedProfit) || 0;
-          const notional = Math.abs(amt * mark) || Math.abs(parseFloat(p.notional ?? "0")) || 0;
-          const estCloseFeeUsdt = notional * FUTURES_TAKER_FEE_RATE;
-          const estRoundTripFeeUsdt = notional * (FUTURES_TAKER_FEE_RATE + FUTURES_MAKER_FEE_RATE);
-          const netUnrealizedAfterCloseFee = upnl - estCloseFeeUsdt;
-          const leverage = parseFloat(p.leverage) || 1;
-          const initialMargin = leverage > 0 ? notional / leverage : 0;
-          const roiPct = initialMargin > 0 ? (upnl / initialMargin) * 100 : 0;
-          const netRoiPct =
-            initialMargin > 0 ? (netUnrealizedAfterCloseFee / initialMargin) * 100 : 0;
-          const acctPos = acctByKey.get(`${p.symbol}:${p.positionSide}`);
-          const maintMargin = parseFloat(acctPos?.maintMargin ?? "0") || 0;
-          const isolated = p.marginType === "isolated";
-          const isolatedWallet = parseFloat(p.isolatedWallet ?? "0") || 0;
-          const denom = isolated ? isolatedWallet + upnl : marginBalance;
-          const marginRatioPct = denom > 0 ? (maintMargin / denom) * 100 : 0;
-          const fundingRate = parseFloat(premiumBySym.get(p.symbol)?.lastFundingRate ?? "0") || 0;
-          const estFundingFee = notional * fundingRate * (amt >= 0 ? -1 : 1);
-          const nextFundingTime = premiumBySym.get(p.symbol)?.nextFundingTime ?? null;
-          const symCfg = symConfigBySymbol.get(p.symbol);
-          const spacingPct = Number(symCfg?.grid_spacing_pct ?? 0);
-          const tpTargetUsdt = notional * (spacingPct / 100);
-          const tpTargetPrice =
-            spacingPct > 0 && entry > 0
-              ? entry * (1 + ((amt >= 0 ? 1 : -1) * spacingPct) / 100)
-              : null;
-          return {
-            symbol: p.symbol,
-            positionAmt: p.positionAmt,
-            entryPrice: p.entryPrice,
-            breakEvenPrice: p.breakEvenPrice ?? null,
-            markPrice: String(mark),
-            liquidationPrice: p.liquidationPrice,
-            marginRatioPct,
-            marginType: p.marginType,
-            isolatedMargin: p.isolatedMargin,
-            initialMargin,
-            unrealizedProfit: String(upnl),
-            roiPct,
-            estCloseFeeUsdt,
-            estRoundTripFeeUsdt,
-            netUnrealizedAfterCloseFee,
-            netRoiPct,
-            leverage: p.leverage,
-            notional,
-            estFundingFee,
-            fundingRate,
-            nextFundingTime,
-            tpTargetUsdt,
-            tpTargetPrice,
-          };
-        });
-      openOrders = (liveOrders ?? [])
-        .filter((o: any) => String(o.clientOrderId ?? "").startsWith(`grid_${o.symbol}_`))
-        .map((o: any) => ({
-          symbol: o.symbol,
-          side: o.side,
-          price: o.price,
-          origQty: o.origQty,
-          executedQty: o.executedQty,
-          status: o.status,
-          orderId: o.orderId,
-          clientOrderId: o.clientOrderId,
-          notional: Number(o.origQty ?? 0) * Number(o.price ?? 0),
-          estMakerFeeUsdt: Number(o.origQty ?? 0) * Number(o.price ?? 0) * FUTURES_MAKER_FEE_RATE,
-        }));
+      positions = mapPositions(risk ?? [], premium ?? [], acct?.positions ?? [], marginBalance, symConfigBySymbol);
+      openOrders = mapOpenOrders(liveOrders ?? []);
     } catch (e) {
       const message = formatBinanceError(e, cfg?.testnet ?? true);
       if (cfg?.is_running && isBinanceAuthError(e)) {
@@ -589,7 +324,7 @@ export const getDashboard = createServerFn({ method: "GET" })
       (s, t) => s + Number(t.realized_pnl) - Number(t.commission ?? 0),
       0,
     );
-    const realizedToday = realizedTodayBinance ?? realizedTodayDb;
+    const realizedToday = realizedTodayDb || realizedTodayBinance || 0;
 
     return {
       cfg,
@@ -816,7 +551,15 @@ export const setTestnet = createServerFn({ method: "POST" })
         testnet: data.testnet,
         is_running: false,
         max_open_trades: data.testnet ? 4 : 1,
+        bot_capital_pct: data.testnet ? 30 : 100,
       });
+      if (!data.testnet) {
+        updateLocalSymbol(context.userId, "BTCUSDT", {
+          order_size_usdt: 5,
+          min_order_size_usdt: 5,
+          max_order_size_usdt: 10,
+        });
+      }
       addLocalLog(
         context.userId,
         "warn",
@@ -828,12 +571,25 @@ export const setTestnet = createServerFn({ method: "POST" })
     await remoteDb
       .from("bot_config")
       .update({
-        testnet: data.testnet,
-        is_running: false,
-        max_open_trades: data.testnet ? 4 : 1,
-        updated_at: new Date().toISOString(),
-      })
+      testnet: data.testnet,
+      is_running: false,
+      max_open_trades: data.testnet ? 4 : 1,
+      bot_capital_pct: data.testnet ? 30 : 100,
+      updated_at: new Date().toISOString(),
+    })
       .eq("user_id", context.userId);
+    if (!data.testnet) {
+      await remoteDb
+        .from("symbol_config")
+        .update({
+          order_size_usdt: 5,
+          min_order_size_usdt: 5,
+          max_order_size_usdt: 10,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("user_id", context.userId)
+        .eq("symbol", "BTCUSDT");
+    }
     await botLog(
       context.userId,
       "warn",
@@ -918,6 +674,11 @@ export const applyPaperHighRiskProfile = createServerFn({ method: "POST" })
         consecutive_loss_pause_count: 1,
         drawdown_pause_pct: 2,
         max_total_notional_usdt: 0,
+        paper_start_equity_usdt: null,
+        paper_peak_equity_usdt: null,
+        paper_api_failure_count: 0,
+        paper_kill_switch_triggered_at: null,
+        paper_kill_switch_reason: null,
         updated_at: new Date().toISOString(),
       })
       .eq("user_id", context.userId);
@@ -1013,7 +774,18 @@ export const updateSymbol = createServerFn({ method: "POST" })
   .inputValidator((d: z.infer<typeof symbolSchema>) => symbolSchema.parse(d))
   .handler(async ({ data, context }) => {
     if (!hasRemoteDb()) {
-      updateLocalSymbol(context.userId, data.symbol, data);
+      const testnet = Boolean(getLocalBotState(context.userId).cfg.testnet ?? true);
+      const liveMinOrderUsdt = 5;
+      const nextData =
+        !testnet && data.symbol === "BTCUSDT"
+          ? {
+              ...data,
+              order_size_usdt: Math.max(liveMinOrderUsdt, Number(data.order_size_usdt ?? 0)),
+              min_order_size_usdt: Math.max(liveMinOrderUsdt, Number(data.min_order_size_usdt ?? 0)),
+              max_order_size_usdt: Math.max(liveMinOrderUsdt, Number(data.max_order_size_usdt ?? 0)),
+            }
+          : data;
+      updateLocalSymbol(context.userId, data.symbol, nextData);
       addLocalLog(context.userId, "info", `Updated ${data.symbol} symbol settings`, data.symbol);
       if (getLocalBotState(context.userId).cfg.is_running) {
         ensureLocalBotRunner(context.userId);
@@ -1029,9 +801,26 @@ export const updateSymbol = createServerFn({ method: "POST" })
       return { ok: true };
     }
 
+    const { data: botCfg } = await remoteDb
+      .from("bot_config")
+      .select("testnet")
+      .eq("user_id", context.userId)
+      .maybeSingle();
+    const testnet = Boolean((botCfg as any)?.testnet ?? true);
+    const liveMinOrderUsdt = 5;
+    const nextData =
+      !testnet && data.symbol === "BTCUSDT"
+        ? {
+            ...data,
+            order_size_usdt: Math.max(liveMinOrderUsdt, Number(data.order_size_usdt ?? 0)),
+            min_order_size_usdt: Math.max(liveMinOrderUsdt, Number(data.min_order_size_usdt ?? 0)),
+            max_order_size_usdt: Math.max(liveMinOrderUsdt, Number(data.max_order_size_usdt ?? 0)),
+          }
+        : data;
+
     await remoteDb
       .from("symbol_config")
-      .update({ ...data, updated_at: new Date().toISOString() })
+      .update({ ...nextData, updated_at: new Date().toISOString() })
       .eq("user_id", context.userId)
       .eq("symbol", data.symbol);
     return { ok: true };
@@ -1548,14 +1337,18 @@ export const optimizeSymbol = createServerFn({ method: "POST" })
     const best = ranked[0];
 
     if (!hasRemoteDb()) {
-      const orderSizeUsdt = Math.max(75, Math.min(150, best.orderSizeUsdt));
+      const testnet = Boolean(getLocalBotState(userId).cfg.testnet ?? true);
+      const liveMinOrderUsdt = 5;
+      const orderSizeUsdt = testnet
+        ? Math.max(75, Math.min(150, best.orderSizeUsdt))
+        : Math.max(liveMinOrderUsdt, best.orderSizeUsdt);
       updateLocalSymbol(userId, symbol, {
         enabled: true,
         grid_levels: best.gridLevels,
         grid_spacing_pct: best.spacingPct,
         order_size_usdt: orderSizeUsdt,
-        min_order_size_usdt: 50,
-        max_order_size_usdt: 150,
+        min_order_size_usdt: testnet ? 50 : liveMinOrderUsdt,
+        max_order_size_usdt: testnet ? 150 : Math.max(liveMinOrderUsdt, Math.ceil(orderSizeUsdt * 2)),
         leverage: best.leverage,
         lower_bound: Math.round(lowerBound * 1e6) / 1e6,
         upper_bound: Math.round(upperBound * 1e6) / 1e6,
@@ -1600,6 +1393,8 @@ export const optimizeSymbol = createServerFn({ method: "POST" })
         grid_levels: best.gridLevels,
         grid_spacing_pct: best.spacingPct,
         order_size_usdt: best.orderSizeUsdt,
+        min_order_size_usdt: 5,
+        max_order_size_usdt: Math.max(5, Math.ceil(best.orderSizeUsdt * 2)),
         leverage: best.leverage,
         lower_bound: Math.round(lowerBound * 1e6) / 1e6,
         upper_bound: Math.round(upperBound * 1e6) / 1e6,
@@ -1619,7 +1414,7 @@ export const optimizeSymbol = createServerFn({ method: "POST" })
       .eq("user_id", userId)
       .single();
     const currentCap = Number(botCfg?.max_total_notional_usdt ?? 500);
-    const planned = best.orderSizeUsdt * 2;
+    const planned = Math.max(5, best.orderSizeUsdt) * 2;
     if (planned > currentCap) {
       await remoteDb
         .from("bot_config")

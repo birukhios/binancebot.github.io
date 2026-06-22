@@ -8,6 +8,7 @@ const TESTNET = "https://testnet.binancefuture.com";
 const BINANCE_READ_TIMEOUT_MS = 2_500;
 const BINANCE_WRITE_TIMEOUT_MS = 7_000;
 let proxyAgentCache: { url: string; agent: ProxyAgent } | null = null;
+const OPEN_ORDERS_CACHE_TTL_MS = 5_000;
 
 // Original owner can still fall back to the env-stored keys.
 const OWNER_USER_ID = "766ced41-29ab-4304-9497-800a95bb7530";
@@ -174,6 +175,35 @@ function binanceFetch(input: string | URL, init: RequestInit = {}) {
 }
 
 const serverTimeOffsetCache = new Map<string, { offsetMs: number; expiresAt: number }>();
+const openOrdersCache = new Map<
+  string,
+  { value?: any[]; pending?: Promise<any[]>; expiresAt: number }
+>();
+
+function openOrdersCacheKey(creds: BinanceCreds) {
+  return `${creds.testnet ? "testnet" : "mainnet"}:${creds.apiKey}`;
+}
+
+function getCachedOpenOrders(creds: BinanceCreds) {
+  const key = openOrdersCacheKey(creds);
+  const cached = openOrdersCache.get(key);
+  if (cached && cached.value && cached.expiresAt > Date.now()) {
+    return Promise.resolve(cached.value);
+  }
+  if (cached?.pending) return cached.pending;
+
+  const pending = signedReq<any[]>(creds, "GET", "/fapi/v1/openOrders", {});
+  openOrdersCache.set(key, { ...cached, pending, expiresAt: Date.now() + OPEN_ORDERS_CACHE_TTL_MS });
+  return pending
+    .then((rows) => {
+      openOrdersCache.set(key, { value: rows, expiresAt: Date.now() + OPEN_ORDERS_CACHE_TTL_MS });
+      return rows;
+    })
+    .catch((error) => {
+      openOrdersCache.delete(key);
+      throw error;
+    });
+}
 
 async function serverTimestamp(creds: BinanceCreds, forceRefresh = false) {
   const host = base(creds);
@@ -542,6 +572,12 @@ export const binance = {
     publicReq<
       Array<{ symbol: string; markPrice: string; lastFundingRate: string; nextFundingTime: number }>
     >(c, "/fapi/v1/premiumIndex"),
+  bookTicker: (c: BinanceCreds, symbol: string) =>
+    publicReq<{ symbol: string; bidPrice: string; bidQty: string; askPrice: string; askQty: string }>(
+      c,
+      "/fapi/v1/ticker/bookTicker",
+      { symbol },
+    ),
   klines: (c: BinanceCreds, symbol: string, interval: string, limit = 100) =>
     publicReq<any[][]>(c, "/fapi/v1/klines", { symbol, interval, limit }),
 
@@ -563,7 +599,9 @@ export const binance = {
     }
   },
   openOrders: (c: BinanceCreds, symbol?: string) =>
-    signedReq<any[]>(c, "GET", "/fapi/v1/openOrders", symbol ? { symbol } : {}),
+    symbol
+      ? signedReq<any[]>(c, "GET", "/fapi/v1/openOrders", { symbol })
+      : getCachedOpenOrders(c),
   openAlgoOrders: (c: BinanceCreds, symbol?: string) =>
     signedReq<any[]>(c, "GET", "/fapi/v1/openAlgoOrders", symbol ? { symbol } : {}),
   userTrades: (c: BinanceCreds, symbol: string, fromId?: number, limit = 100) =>

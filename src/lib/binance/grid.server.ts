@@ -42,10 +42,10 @@ const remoteDb = {
 // Liquidation guard thresholds (% distance from mark to liquidation price)
 const LIQUIDATION_HARD_PCT = 5;
 const LIQUIDATION_SOFT_PCT = 10;
-const DEFAULT_STOP_LOSS_ROI_PCT = -50;
+const DEFAULT_STOP_LOSS_ROI_PCT = -15;
 const DUST_POSITION_NOTIONAL_USDT = 25;
-const TAKE_PROFIT_SPACING_MULT = 0.35;
-const TAKE_PROFIT_FEE_BUFFER_PCT = 0.025;
+const TAKE_PROFIT_SPACING_MULT = 0.20;
+const TAKE_PROFIT_FEE_BUFFER_PCT = 0.015;
 const GRID_ORDER_MIN_LIFETIME_MS = 90_000;
 const GRID_REPRICE_TOLERANCE_MULT = 0.35;
 const FRONT_LEVEL_SPACING_MULT = 0.25;
@@ -118,6 +118,26 @@ function levelSpacingMultiplier(level: number) {
 function roundStepUp(value: number, step: number, precision: number): number {
   const rounded = Math.ceil(value / step) * step;
   return parseFloat(rounded.toFixed(precision));
+}
+
+function makerSafeLimitPrice(
+  side: "BUY" | "SELL",
+  desiredPrice: number,
+  bidPrice: number | null,
+  askPrice: number | null,
+  tickSize: number,
+  pricePrecision: number,
+) {
+  const minTick = Math.max(tickSize, 0);
+  const safePrice =
+    side === "BUY"
+      ? askPrice && askPrice > 0
+        ? Math.min(desiredPrice, askPrice - minTick)
+        : desiredPrice
+      : bidPrice && bidPrice > 0
+        ? Math.max(desiredPrice, bidPrice + minTick)
+        : desiredPrice;
+  return roundStep(Math.max(minTick, safePrice), tickSize, pricePrecision);
 }
 
 // EMA of the last N closes. Returns null if not enough data.
@@ -1304,6 +1324,9 @@ async function reconcileSymbolLocked(
     }
     throw e;
   });
+  const book = await binance.bookTicker(creds, cfg.symbol).catch(() => null);
+  const bestBid = book ? Number(book.bidPrice ?? 0) : null;
+  const bestAsk = book ? Number(book.askPrice ?? 0) : null;
   const liveByLevel = new Map<string, any>();
   const liveProtective = new Map<string, any>();
   const liveProtectiveOrders: any[] = [];
@@ -1382,12 +1405,28 @@ async function reconcileSymbolLocked(
       }
     }
     try {
+      let finalPrice = makerSafeLimitPrice(
+        d.side,
+        d.price,
+        bestBid,
+        bestAsk,
+        f.tickSize,
+        f.pricePrecision,
+      );
+      if (Math.abs(finalPrice - d.price) > Math.max(f.tickSize / 2, 1e-9)) {
+        await botLog(
+          userId,
+          "info",
+          `Adjusted ${d.side} limit ${d.price} → ${finalPrice} to keep the order post-only and away from the spread.`,
+          cfg.symbol,
+        );
+      }
       const placed = await binance.placeOrder(creds, {
         symbol: cfg.symbol,
         side: d.side,
         type: "LIMIT",
         quantity: d.quantity,
-        price: d.price,
+        price: finalPrice,
         timeInForce: "GTX",
         reduceOnly: d.reduceOnly,
         newClientOrderId: cid,
@@ -1396,7 +1435,7 @@ async function reconcileSymbolLocked(
         user_id: userId,
         symbol: cfg.symbol,
         side: d.side,
-        price: d.price,
+        price: finalPrice,
         qty: d.quantity,
         binance_order_id: placed.orderId,
         client_order_id: cid,
@@ -1407,21 +1446,80 @@ async function reconcileSymbolLocked(
         await botLog(
           userId,
           "info",
-          `Attached take-profit ${d.side} ${d.quantity} @ ${d.price}.`,
+          `Attached take-profit ${d.side} ${d.quantity} @ ${finalPrice}.`,
           cfg.symbol,
         );
       } else {
         await botLog(
           userId,
           "info",
-          `Placed grid entry ${d.side} ${d.quantity} @ ${d.price} (level ${d.level}).`,
+          `Placed grid entry ${d.side} ${d.quantity} @ ${finalPrice} (level ${d.level}).`,
           cfg.symbol,
         );
       }
     } catch (e) {
       const msg = (e as Error).message;
+      const isPostOnlyReject =
+        msg.includes("immediately match") ||
+        msg.includes("-2010") ||
+        msg.includes("Post Only") ||
+        msg.includes("post only");
+      if (isPostOnlyReject) {
+        try {
+          const freshBook = await binance.bookTicker(creds, cfg.symbol).catch(() => null);
+          const retryBid = freshBook ? Number(freshBook.bidPrice ?? 0) : bestBid;
+          const retryAsk = freshBook ? Number(freshBook.askPrice ?? 0) : bestAsk;
+          const retryPrice = makerSafeLimitPrice(
+            d.side,
+            d.price,
+            retryBid,
+            retryAsk,
+            f.tickSize,
+            f.pricePrecision,
+          );
+          if (retryPrice !== d.price) {
+            const placed = await binance.placeOrder(creds, {
+              symbol: cfg.symbol,
+              side: d.side,
+              type: "LIMIT",
+              quantity: d.quantity,
+              price: retryPrice,
+              timeInForce: "GTX",
+              reduceOnly: d.reduceOnly,
+              newClientOrderId: cid,
+            });
+            await remoteDb.from("grid_orders").insert({
+              user_id: userId,
+              symbol: cfg.symbol,
+              side: d.side,
+              price: retryPrice,
+              qty: d.quantity,
+              binance_order_id: placed.orderId,
+              client_order_id: cid,
+              status: placed.status,
+              level_index: d.level,
+            });
+            await botLog(
+              userId,
+              "info",
+              `Repriced ${d.side} ${d.quantity} @ ${retryPrice} after post-only rejection.`,
+              cfg.symbol,
+            );
+            continue;
+          }
+        } catch {
+          // fall through to the warning below
+        }
+      }
       if (!msg.includes("immediately match") && !msg.includes("-2010")) {
         await botLog(userId, "warn", `place ${d.side}@${d.price}: ${msg}`, cfg.symbol);
+      } else {
+        await botLog(
+          userId,
+          "warn",
+          `Post-only rejection on ${d.side}@${d.price}; the bot will reprice away from the spread next tick.`,
+          cfg.symbol,
+        );
       }
     }
   }
