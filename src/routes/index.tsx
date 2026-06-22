@@ -4,7 +4,7 @@ import { AuthPage } from "@/routes/auth";
 import { DashboardShell } from "@/components/dashboard/DashboardShell";
 
 export const Route = createFileRoute("/")({
-  head: () => ({ meta: [{ title: "Grid Bot Dashboard" }] }),
+  head: () => ({ meta: [{ title: "BKbot" }] }),
   component: Dashboard,
 });
 

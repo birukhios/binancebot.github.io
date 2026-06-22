@@ -8,7 +8,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { toast } from "sonner";
 
 export const Route = createFileRoute("/auth")({
-  head: () => ({ meta: [{ title: "Sign in – Grid Bot" }] }),
+  head: () => ({ meta: [{ title: "Sign in – BKbot" }] }),
   component: AuthPage,
 });
 
@@ -88,9 +88,9 @@ export function AuthPage() {
     <div className="flex min-h-screen items-center justify-center bg-background p-4">
       <Card className="w-full max-w-md">
         <CardHeader>
-          <CardTitle>Grid Trading Bot</CardTitle>
+          <CardTitle>BKbot</CardTitle>
           <CardDescription>
-            Sign in to control your Binance Futures grid bot. Owner-only — do not share access.
+            Sign in to your automated crypto trading bot.
           </CardDescription>
         </CardHeader>
         <CardContent>

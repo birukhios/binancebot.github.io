@@ -1,6 +1,7 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { authClient } from "@/lib/auth-client";
+import { registerServiceWorker, subscribeToPush, isPushSupported } from "@/lib/push-notifications";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import {
@@ -62,6 +63,13 @@ export function DashboardShell() {
     root.style.colorScheme = theme;
     window.localStorage.setItem("kelay-theme", theme);
   }, [theme]);
+
+  useEffect(() => {
+    if (!isPushSupported()) return;
+    registerServiceWorker().then((reg) => {
+      if (reg) subscribeToPush(reg).catch(() => {});
+    });
+  }, []);
 
   const session = useQuery({
     queryKey: ["auth-session"],
@@ -140,7 +148,7 @@ export function DashboardShell() {
       <Sidebar variant="inset" collapsible="icon">
         <SidebarHeader className="p-3">
           <span className="text-xs font-semibold uppercase tracking-wider text-sidebar-foreground/70 group-data-[collapsible=icon]:hidden">
-            Kelay Bot
+            BKbot
           </span>
         </SidebarHeader>
         <SidebarContent>

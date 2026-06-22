@@ -9,6 +9,7 @@ import {
   updateLocalBotConfig,
   updateLocalSymbol,
 } from "@/lib/bot/local-bot-store.server";
+import { sendPushToUser } from "@/lib/bot/push.server";
 
 const LOOP_MS = Number(process.env.LOCAL_BOT_LOOP_MS ?? 10_000);
 const BTC_SYMBOL = "BTCUSDT";
@@ -238,6 +239,11 @@ export async function runLocalBotTick(userId: string) {
       BTC_SYMBOL,
       { dedupeKey: "daily-loss-warn", dedupeWindowMs: 60 * 60 * 1000 },
     );
+    sendPushToUser(userId, {
+      title: "BKbot - Loss Alert",
+      body: `Daily loss: ${pnl.total.toFixed(2)} USDT (limit: -${dailyLossLimit.toFixed(2)})`,
+      tag: "daily-loss",
+    }).catch(() => {});
   }
 
   if (pnl.total < 0 && pnl.consecutiveLosses >= lossPauseCount) {
@@ -248,6 +254,19 @@ export async function runLocalBotTick(userId: string) {
       BTC_SYMBOL,
       { dedupeKey: "loss-streak-warn", dedupeWindowMs: 60 * 60 * 1000 },
     );
+    sendPushToUser(userId, {
+      title: "BKbot - Loss Streak",
+      body: `${pnl.consecutiveLosses} consecutive losses. PnL: ${pnl.total.toFixed(2)} USDT`,
+      tag: "loss-streak",
+    }).catch(() => {});
+  }
+
+  if (dailyTarget > 0 && pnl.total >= dailyTarget) {
+    sendPushToUser(userId, {
+      title: "BKbot - Profit Target Hit!",
+      body: `Daily profit: +${pnl.total.toFixed(2)} USDT (target: +${dailyTarget.toFixed(2)})`,
+      tag: "daily-profit",
+    }).catch(() => {});
   }
 
   const entriesBlocked =

@@ -13,6 +13,9 @@ import { Route as AuthRouteImport } from './routes/auth'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as ApiSessionRouteImport } from './routes/api/session'
 import { Route as ApiAuthRouteImport } from './routes/api/auth'
+import { Route as ApiPushVapidKeyRouteImport } from './routes/api/push/vapid-key'
+import { Route as ApiPushUnsubscribeRouteImport } from './routes/api/push/unsubscribe'
+import { Route as ApiPushSubscribeRouteImport } from './routes/api/push/subscribe'
 import { Route as ApiPublicBotTickRouteImport } from './routes/api/public/bot-tick'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
 
@@ -36,6 +39,21 @@ const ApiAuthRoute = ApiAuthRouteImport.update({
   path: '/api/auth',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiPushVapidKeyRoute = ApiPushVapidKeyRouteImport.update({
+  id: '/api/push/vapid-key',
+  path: '/api/push/vapid-key',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiPushUnsubscribeRoute = ApiPushUnsubscribeRouteImport.update({
+  id: '/api/push/unsubscribe',
+  path: '/api/push/unsubscribe',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiPushSubscribeRoute = ApiPushSubscribeRouteImport.update({
+  id: '/api/push/subscribe',
+  path: '/api/push/subscribe',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiPublicBotTickRoute = ApiPublicBotTickRouteImport.update({
   id: '/api/public/bot-tick',
   path: '/api/public/bot-tick',
@@ -54,6 +72,9 @@ export interface FileRoutesByFullPath {
   '/api/session': typeof ApiSessionRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/public/bot-tick': typeof ApiPublicBotTickRoute
+  '/api/push/subscribe': typeof ApiPushSubscribeRoute
+  '/api/push/unsubscribe': typeof ApiPushUnsubscribeRoute
+  '/api/push/vapid-key': typeof ApiPushVapidKeyRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -62,6 +83,9 @@ export interface FileRoutesByTo {
   '/api/session': typeof ApiSessionRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/public/bot-tick': typeof ApiPublicBotTickRoute
+  '/api/push/subscribe': typeof ApiPushSubscribeRoute
+  '/api/push/unsubscribe': typeof ApiPushUnsubscribeRoute
+  '/api/push/vapid-key': typeof ApiPushVapidKeyRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -71,6 +95,9 @@ export interface FileRoutesById {
   '/api/session': typeof ApiSessionRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/public/bot-tick': typeof ApiPublicBotTickRoute
+  '/api/push/subscribe': typeof ApiPushSubscribeRoute
+  '/api/push/unsubscribe': typeof ApiPushUnsubscribeRoute
+  '/api/push/vapid-key': typeof ApiPushVapidKeyRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -81,6 +108,9 @@ export interface FileRouteTypes {
     | '/api/session'
     | '/api/auth/$'
     | '/api/public/bot-tick'
+    | '/api/push/subscribe'
+    | '/api/push/unsubscribe'
+    | '/api/push/vapid-key'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -89,6 +119,9 @@ export interface FileRouteTypes {
     | '/api/session'
     | '/api/auth/$'
     | '/api/public/bot-tick'
+    | '/api/push/subscribe'
+    | '/api/push/unsubscribe'
+    | '/api/push/vapid-key'
   id:
     | '__root__'
     | '/'
@@ -97,6 +130,9 @@ export interface FileRouteTypes {
     | '/api/session'
     | '/api/auth/$'
     | '/api/public/bot-tick'
+    | '/api/push/subscribe'
+    | '/api/push/unsubscribe'
+    | '/api/push/vapid-key'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -105,6 +141,9 @@ export interface RootRouteChildren {
   ApiAuthRoute: typeof ApiAuthRouteWithChildren
   ApiSessionRoute: typeof ApiSessionRoute
   ApiPublicBotTickRoute: typeof ApiPublicBotTickRoute
+  ApiPushSubscribeRoute: typeof ApiPushSubscribeRoute
+  ApiPushUnsubscribeRoute: typeof ApiPushUnsubscribeRoute
+  ApiPushVapidKeyRoute: typeof ApiPushVapidKeyRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -135,6 +174,27 @@ declare module '@tanstack/react-router' {
       path: '/api/auth'
       fullPath: '/api/auth'
       preLoaderRoute: typeof ApiAuthRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/push/vapid-key': {
+      id: '/api/push/vapid-key'
+      path: '/api/push/vapid-key'
+      fullPath: '/api/push/vapid-key'
+      preLoaderRoute: typeof ApiPushVapidKeyRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/push/unsubscribe': {
+      id: '/api/push/unsubscribe'
+      path: '/api/push/unsubscribe'
+      fullPath: '/api/push/unsubscribe'
+      preLoaderRoute: typeof ApiPushUnsubscribeRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/push/subscribe': {
+      id: '/api/push/subscribe'
+      path: '/api/push/subscribe'
+      fullPath: '/api/push/subscribe'
+      preLoaderRoute: typeof ApiPushSubscribeRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/api/public/bot-tick': {
@@ -171,6 +231,9 @@ const rootRouteChildren: RootRouteChildren = {
   ApiAuthRoute: ApiAuthRouteWithChildren,
   ApiSessionRoute: ApiSessionRoute,
   ApiPublicBotTickRoute: ApiPublicBotTickRoute,
+  ApiPushSubscribeRoute: ApiPushSubscribeRoute,
+  ApiPushUnsubscribeRoute: ApiPushUnsubscribeRoute,
+  ApiPushVapidKeyRoute: ApiPushVapidKeyRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
